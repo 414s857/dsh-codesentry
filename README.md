@@ -4,7 +4,7 @@
 
 **让 AI 帮你把整个代码仓库审一遍。**
 
-任务化的代码审计插件 · 跑在 [DeepSeek Harness](https://github.com/deepseek-ai) 里 · 大仓库自动分片 · 出可直接交付的审计报告
+任务化的代码审计插件 · 跑在 DeepSeek Harness 里 · 大仓库自动分片 · 出可直接交付的审计报告
 
 </div>
 
@@ -14,7 +14,7 @@
 
 给它一个代码目录和一组漏洞类型（或一份审计 Skill），它开一个独立的 AI 会话，把仓库按模块切片、逐片深读代码找漏洞，边跑边显示进度，最后沉淀成一份能直接交出去的审计报告。
 
-不是"问 AI 有没有漏洞"的一问一答，而是一个**能干完整趟活得**的审计工作台。
+不是"问 AI 有没有漏洞"的一问一答，而是一个**能把一整趟审计干完**的工作台。
 
 ## 为什么用它
 
@@ -27,7 +27,7 @@
 
 ## 核心能力
 
-- **两种审计模式** — 按漏洞提示词（内置 14 类）审，或完全按一份 `SKILL.md` 审计 Skill 执行
+- **两种审计模式** — 按漏洞提示词（内置）审，或完全按一份 `SKILL.md` 审计 Skill 执行
 - **大仓库分片** — 超过阈值的仓库自动切片并行审计 + 跨切片汇聚
 - **实时进度** — 百分比 / 当前切片 / 工具调用数 / 已发现漏洞数 / 运行时长，全程可见
 - **暂停继续** — 运行中可暂停，继续时复用同一会话从中断点接着审
@@ -38,7 +38,7 @@
 ## 快速开始
 
 ```bash
-# 1. 安装（DSH 插件）
+# 1. 安装（DSH 插件，profile 换成你实际在用的那个，如 web / desktop / tui）
 dsh plugin --profile web add github:414s857/dsh-codesentry
 
 # 2. 重启客户端后，左侧导航出现「代码审计」入口
@@ -57,26 +57,31 @@ dsh plugin --profile web add github:414s857/dsh-codesentry
 
 ## 配置
 
-在 profile 的 `cordis.patch.yml` 里覆盖（都有合理默认值）：
+几乎所有东西都能在**界面里的「设置」页**直接调，改完即生效，不需要碰配置文件。想一次改到默认值，再动 `cordis.patch.yml`：
+
+| 项 | 默认 | 说明 |
+|---|---|---|
+| `maxConcurrentRuns` | `2` | 同时跑几个任务。机器扛得住可以调高，想省资源就调低 |
+| `llmRetryCount` | `3` | 模型调用失败重试几次 |
+| `llmRetryDelayMinutes` | `5` | 每次重试间隔几分钟 |
+| `defaultProvider` / `defaultModel` | 跟随 DSH | 不填就用宿主当前的默认模型，填了就认这里的 |
 
 ```yaml
+# profile 的 cordis.patch.yml，只写你想改的那几行
 - id: codesentry
   config:
-    dataDir: !!js dshHomePath('storages', 'codesentry')
-    maxConcurrentRuns: 2
-    llmRetryDelayMinutes: 5
-    llmRetryCount: 3
-    defaultProvider: deepseek
-    defaultModel: deepseek-chat
+    maxConcurrentRuns: 4
 ```
+
+数据目录（`dataDir`）一般不用动，默认就是下面「存储」里那个位置。
 
 ## 存储
 
+数据就放在这一个目录里，卸载时一起带走，不散落在别处：
+
 ```text
 ${DSH_HOME}/storages/codesentry/
-├── codesentry.db              # SQLite：tasks / runs / findings / prompts / skills / settings
-├── trajectories/<runId>.jsonl # 每次运行的完整运行日志（NDJSON）
-└── reports/                   # 导出的报告归档
+├── codesentry.db              # 全部任务 / 运行 / 漏洞 / 提示词 / 技能 / 设置
+├── trajectories/<runId>.jsonl # 每次运行的完整过程流水，出问题好复盘
+└── reports/                   # 导出的报告都在这里留档
 ```
-
-独立 SQLite 为唯一事实来源，WAL 模式，插件卸载自动关闭。
