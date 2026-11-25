@@ -1,0 +1,16 @@
+# dsh-codesentry bundle layer.
+# The plugin is a single self-contained package: SQLite storage, audit runner,
+# scheduler, agent tools, `/audit` command, and the web console served by the
+# host webServer under /dsh-codesentry.
+
+- insert:
+    - id: codesentry
+      name: dsh-codesentry
+      # Optional overrides:
+      # config:
+      #   dataDir: !!js dshHomePath('storages', 'codesentry')
+      #   maxConcurrentRuns: 2
+      #   llmRetryDelayMinutes: 5
+      #   llmRetryCount: 3
+      #   defaultProvider: deepseek
+      #   defaultModel: deepseek-chat

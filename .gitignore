@@ -1,0 +1,25 @@
+# 依赖
+node_modules/
+
+# 插件本地运行产生的数据（SQLite / 轨迹 / 报告）
+storages/
+*.db
+*.db-wal
+*.db-shm
+trajectories/
+reports/
+
+# 测试与临时产物
+.tmp-data/
+tmp/
+*.log
+
+# 设计探索稿（非插件运行所需）
+design/
+
+# 系统 / 编辑器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

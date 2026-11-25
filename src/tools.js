@@ -1,0 +1,383 @@
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { buildTaskReport } from './report.js'
+import { createTask } from './service.js'
+import { FINDING_STATUSES, REVIEW_STATUSES, SEVERITIES } from './util.js'
+
+const textResult = value => [{ type: 'text', text: JSON.stringify(value, null, 2) }]
+
+/** Register the model-facing audit tools. */
+export async function registerAuditTools(ctx, { store, runner, dataDir, log = () => {} }) {
+  let defineTool
+  try {
+    ;({ defineTool } = await import('@deepseek-ai/dsh-tools'))
+  } catch (error) {
+    log(`未找到 dsh-tools，跳过 Agent 工具注册：${error?.message ?? error}`)
+    return
+  }
+  const tools = ctx.get('tools') ?? ctx.tools
+  if (!tools) {
+    log('当前运行环境没有 tools 服务，跳过 Agent 工具注册')
+    return
+  }
+
+  const register = definition => {
+    ctx.effect(() => tools.register(definition))
+  }
+
+  register(defineTool({
+    name: 'code_audit_list_tasks',
+    description: '列出所有代码审计任务及其状态、调度时间和漏洞数量。用户询问审计任务时使用。',
+    parameters: {},
+    output: { schema: { type: 'json' }, render: (_args, value) => textResult(value) },
+    async execute() {
+      const skills = new Map(store.listSkills().map(skill => [skill.id, skill]))
+      const tasks = store.listTasks().map(task => ({
+        id: task.id,
+        name: task.name,
+        repo_path: task.repo_path,
+        status: task.status,
+        enabled: task.enabled,
+        audit_mode: task.audit_mode,
+        skill_name: task.skill_id ? skills.get(task.skill_id)?.name ?? '' : '',
+        schedule_type: task.schedule_type,
+        schedule_at: task.schedule_at,
+        schedule_cron: task.schedule_cron,
+        next_run_at: task.next_run_at,
+        prompt_count: task.prompt_ids.length,
+        last_run_at: task.last_run_at,
+      }))
+      return { tasks }
+    },
+  }))
+
+  register(defineTool({
+    name: 'code_audit_create_task',
+    description: '新建一个代码审计任务。可选择按漏洞审计提示词或按审计 Skill 执行，并配置定时执行计划。',
+    parameters: {
+      name: { type: 'string', description: '任务名称', required: true },
+      repo_path: { type: 'string', description: '要审计的本地代码目录绝对路径', required: true },
+      description: { type: 'string', description: '任务说明，例如关注的模块或业务背景' },
+      audit_mode: {
+        type: 'string',
+        enum: ['prompts', 'skill'],
+        description: '审计模式：prompts 按漏洞提示词审计（默认），skill 按审计 Skill 规定审计',
+      },
+      skill_name: {
+        type: 'string',
+        description: 'audit_mode 为 skill 时要使用的审计 Skill 名称',
+      },
+      prompt_names: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'audit_mode 为 prompts 时要启用的漏洞审计提示词名称列表；省略则审计全部启用的提示词',
+      },
+      schedule_type: {
+        type: 'string',
+        enum: ['manual', 'once', 'cron', 'interval'],
+        description: '调度类型：manual 手动、once 定时一次、cron Cron 表达式、interval 固定间隔',
+      },
+      schedule_at: { type: 'string', description: 'once 类型的执行时间（ISO 8601）' },
+      schedule_cron: { type: 'string', description: 'cron 类型的 5 字段表达式，例如 "0 2 * * *"' },
+      interval_minutes: { type: 'integer', description: 'interval 类型的间隔分钟数' },
+    },
+    output: { schema: { type: 'json' }, render: (_args, value) => textResult(value) },
+    async execute(args) {
+      const auditMode = args.audit_mode === 'skill' ? 'skill' : 'prompts'
+      let promptIds = []
+      let skillId = ''
+      if (auditMode === 'skill') {
+        if (!args.skill_name) throw new Error('Skill 模式需要指定 skill_name')
+        const skill = store.getSkillByName(args.skill_name)
+        if (!skill) throw new Error(`审计 Skill 不存在：${args.skill_name}`)
+        if (!skill.enabled) throw new Error(`审计 Skill 已禁用：${skill.name}`)
+        skillId = skill.id
+      } else {
+        const allPrompts = store.listPrompts()
+        promptIds = args.prompt_names?.length
+          ? args.prompt_names.map(name => {
+              const prompt = allPrompts.find(item => item.name === name)
+              if (!prompt) throw new Error(`提示词不存在：${name}`)
+              return prompt.id
+            })
+          : allPrompts.filter(prompt => prompt.enabled).map(prompt => prompt.id)
+      }
+      const task = createTask(store, {
+        name: args.name,
+        repo_path: args.repo_path,
+        description: args.description ?? '',
+        audit_mode: auditMode,
+        skill_id: skillId,
+        prompt_ids: promptIds,
+        schedule_type: args.schedule_type ?? 'manual',
+        schedule_at: args.schedule_at,
+        schedule_cron: args.schedule_cron,
+        interval_minutes: args.interval_minutes,
+      })
+      return { task }
+    },
+  }))
+
+  register(defineTool({
+    name: 'code_audit_run_task',
+    description: '立即启动一个代码审计任务。任务将创建一个独立的审计会话，按选中的漏洞提示词进行审计。',
+    parameters: {
+      task_id: { type: 'string', description: '任务 ID', required: true },
+    },
+    output: { schema: { type: 'json' }, render: (_args, value) => textResult(value) },
+    async execute(args) {
+      const run = await runner.start(args.task_id, 'tool')
+      return { run_id: run.id, task_id: run.task_id, status: run.status }
+    },
+  }))
+
+  register(defineTool({
+    name: 'code_audit_list_prompts',
+    description: '列出可用的漏洞审计提示词（名称、分类、默认严重级别、是否启用）。',
+    parameters: {},
+    output: { schema: { type: 'json' }, render: (_args, value) => textResult(value) },
+    async execute() {
+      return {
+        prompts: store.listPrompts().map(prompt => ({
+          id: prompt.id,
+          name: prompt.name,
+          category: prompt.category,
+          default_severity: prompt.default_severity,
+          enabled: prompt.enabled,
+          builtin: prompt.builtin,
+        })),
+      }
+    },
+  }))
+
+  register(defineTool({
+    name: 'code_audit_list_skills',
+    description: '列出可用的代码审计 Skill（名称、分类、说明、是否启用）。',
+    parameters: {},
+    output: { schema: { type: 'json' }, render: (_args, value) => textResult(value) },
+    async execute() {
+      return {
+        skills: store.listSkills().map(skill => ({
+          id: skill.id,
+          name: skill.name,
+          category: skill.category,
+          description: skill.description,
+          enabled: skill.enabled,
+          builtin: skill.builtin,
+        })),
+      }
+    },
+  }))
+
+  register(defineTool({
+    name: 'code_audit_submit_finding',
+    description: '在代码审计过程中上报一个已确认的漏洞。必须提供代码证据与触发路径，不要上报猜测。',
+    parameters: {
+      title: { type: 'string', description: '漏洞标题', required: true },
+      severity: {
+        type: 'string',
+        enum: SEVERITIES,
+        description: '严重级别',
+        required: true,
+      },
+      file_path: { type: 'string', description: '相对审计目录的文件路径', required: true },
+      line_start: { type: 'integer', description: '证据代码起始行号', required: true },
+      line_end: { type: 'integer', description: '证据代码结束行号' },
+      category: { type: 'string', description: '漏洞分类' },
+      cwe_id: {
+        type: 'string',
+        description: '对应的 CWE 编号（如 CWE-89），不确定时留空',
+      },
+      confidence: {
+        type: 'string',
+        enum: ['high', 'medium', 'low'],
+        description: '置信度：high 证据完整可复现，medium 触发路径明确但未复现，low 疑似但未完全确认',
+      },
+      code_snippet: { type: 'string', description: '关键代码片段（不超过 20 行）' },
+      description: { type: 'string', description: '漏洞成因与影响', required: true },
+      evidence: { type: 'string', description: '触发路径或数据流 source → sink' },
+      recommendation: { type: 'string', description: '修复建议' },
+      poc_request: {
+        type: 'string',
+        description: '可利用漏洞的 PoC 请求包示例：原始 HTTP 请求（方法、路径、Host、关键 Header、Body）加一条可直接执行的 curl 命令；不适用时留空',
+      },
+      prompt_name: { type: 'string', description: '命中的审计提示词名称' },
+    },
+    output: { schema: { type: 'json' }, render: (_args, value) => textResult(value) },
+    async execute(args, exec) {
+      const context = runner.contextForAgent(exec.agent)
+      if (!context) throw new Error('当前不在代码审计运行中，无法上报漏洞')
+      const result = runner.submitFinding(context, args)
+      return {
+        finding_id: result.finding.id,
+        created: result.created,
+        task_id: result.finding.task_id,
+        severity: result.finding.severity,
+        title: result.finding.title,
+      }
+    },
+  }))
+
+  register(defineTool({
+    name: 'code_audit_submit_summary',
+    description: '在代码审计结束时提交运行总结：覆盖的漏洞类型、发现数量、未发现问题及原因。',
+    parameters: {
+      summary: { type: 'string', description: '本次审计总结', required: true },
+    },
+    output: { schema: { type: 'json' }, render: (_args, value) => textResult(value) },
+    async execute(args, exec) {
+      const context = runner.contextForAgent(exec.agent)
+      if (!context) throw new Error('当前不在代码审计运行中，无法提交总结')
+      runner.submitSummary(context, args.summary)
+      return { ok: true }
+    },
+  }))
+
+  register(defineTool({
+    name: 'code_audit_submit_review',
+    description: '复核会话专用：逐条提交安全发现的复核结论（confirmed / needs-review / rejected），供二次复核阶段写回台账。',
+    parameters: {
+      verdicts: {
+        type: 'array',
+        description: '复核结论数组，每项 { finding_id, verdict, note }',
+        required: true,
+        items: {
+          type: 'object',
+          properties: {
+            finding_id: { type: 'string', description: '待复核发现的 id' },
+            verdict: {
+              type: 'string',
+              description: `复核结论，${REVIEW_STATUSES.filter(status => status !== 'pending').join(' / ')} 之一`,
+              enum: REVIEW_STATUSES.filter(status => status !== 'pending'),
+            },
+            note: { type: 'string', description: '结论理由：确认时给出完整触发路径；否决时说明是哪一层防护或哪处不符' },
+          },
+          required: ['finding_id', 'verdict'],
+        },
+      },
+    },
+    output: { schema: { type: 'json' }, render: (_args, value) => textResult(value) },
+    async execute(args, exec) {
+      const context = runner.contextForAgent(exec.agent)
+      if (!context) throw new Error('当前不在代码审计复核会话中，无法提交复核结论')
+      return runner.submitReviewVerdict(context, args)
+    },
+  }))
+
+  register(defineTool({
+    name: 'code_audit_submit_skill_report',
+    description: '可选：提交一份按 Skill 生成的完整 Markdown 报告，用于插件归档与导出；不替代 Skill 要求的文件产出。',
+    parameters: {
+      content: {
+        type: 'string',
+        description: '按 Skill 要求生成的完整 Markdown 报告内容',
+        required: true,
+      },
+    },
+    output: { schema: { type: 'json' }, render: (_args, value) => textResult(value) },
+    async execute(args, exec) {
+      const context = runner.contextForAgent(exec.agent)
+      if (!context) throw new Error('当前不在代码审计运行中，无法提交 Skill 报告')
+      runner.submitSkillReport(context, args.content)
+      return { ok: true }
+    },
+  }))
+
+  register(defineTool({
+    name: 'code_audit_report_progress',
+    description: '在代码审计过程中上报当前进度：开始或完成某个漏洞类型（或 Skill 审计）。控制台用这些上报显示扫描进度。',
+    parameters: {
+      prompt_name: {
+        type: 'string',
+        description: '正在审计的漏洞提示词名称；Skill 模式下填写 Skill 名称',
+        required: true,
+      },
+      status: {
+        type: 'string',
+        enum: ['started', 'done'],
+        description: 'started 开始审计该类型，done 已完成该类型',
+        required: true,
+      },
+      note: { type: 'string', description: '一句话进度说明，例如已检查的文件数量与结果' },
+    },
+    output: { schema: { type: 'json' }, render: (_args, value) => textResult(value) },
+    async execute(args, exec) {
+      const context = runner.contextForAgent(exec.agent)
+      if (!context) throw new Error('当前不在代码审计运行中，无法上报进度')
+      return runner.reportProgress(context, args)
+    },
+  }))
+
+  register(defineTool({
+    name: 'code_audit_report_files',
+    description: '在切片审计中上报已经读完的文件清单。每读完一批文件调用一次，用于记录该切片的覆盖率台账；重复上报会自动去重。',
+    parameters: {
+      files: {
+        type: 'array',
+        items: { type: 'string' },
+        description: '已读完的文件的相对路径数组（相对审计目录）',
+        required: true,
+      },
+      note: { type: 'string', description: '可选的说明，例如本批文件审计的结论' },
+    },
+    output: { schema: { type: 'json' }, render: (_args, value) => textResult(value) },
+    async execute(args, exec) {
+      const context = runner.contextForAgent(exec.agent)
+      if (!context) throw new Error('当前不在代码审计运行中，无法上报已读文件')
+      return runner.reportFiles(context, args)
+    },
+  }))
+
+  register(defineTool({
+    name: 'code_audit_update_finding',
+    description: '更新漏洞的处理状态：verified 已确认、ignored 已忽略、false_positive 误报、fixed 已修复、open 重新打开。',
+    parameters: {
+      finding_id: { type: 'string', description: '漏洞记录 ID', required: true },
+      status: {
+        type: 'string',
+        enum: FINDING_STATUSES,
+        description: '新的处理状态',
+        required: true,
+      },
+      status_note: { type: 'string', description: '处理备注，例如忽略原因或验证结论' },
+    },
+    output: { schema: { type: 'json' }, render: (_args, value) => textResult(value) },
+    async execute(args) {
+      const finding = store.updateFinding(args.finding_id, {
+        status: args.status,
+        status_note: args.status_note,
+      })
+      if (!finding) throw new Error('漏洞记录不存在')
+      return { finding: { id: finding.id, title: finding.title, status: finding.status, status_note: finding.status_note } }
+    },
+  }))
+
+  register(defineTool({
+    name: 'code_audit_export_report',
+    description: '导出指定审计任务的报告（markdown、html、json 或 sarif），返回报告文件路径。Skill 模式可选标准报告或 Skill 自定义报告。',
+    parameters: {
+      task_id: { type: 'string', description: '任务 ID', required: true },
+      format: {
+        type: 'string',
+        enum: ['markdown', 'html', 'json', 'sarif'],
+        description: '报告格式，默认 markdown；sarif 为 SARIF 2.1.0 机器可读格式',
+      },
+      report_type: {
+        type: 'string',
+        enum: ['standard', 'skill'],
+        description: 'standard 标准审计报告（默认），skill 按 Skill 规定生成的报告',
+      },
+    },
+    output: { schema: { type: 'json' }, render: (_args, value) => textResult(value) },
+    async execute(args) {
+      const report = buildTaskReport(store, args.task_id, args.format ?? 'markdown', {
+        type: args.report_type === 'skill' ? 'skill' : 'standard',
+      })
+      const reportsDir = join(dataDir, 'reports')
+      mkdirSync(reportsDir, { recursive: true })
+      const filePath = join(reportsDir, report.filename)
+      writeFileSync(filePath, report.content)
+      return { path: filePath, filename: report.filename, mime: report.mime }
+    },
+  }))
+}

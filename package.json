@@ -1,0 +1,68 @@
+{
+  "name": "dsh-codesentry",
+  "version": "1.0.0",
+  "description": "Code audit plugin for DeepSeek Harness: sharded multi-session repo audits, audit tasks, vulnerability prompts, SKILL.md audit skills, findings and reports.",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./client": "./src/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src/**/*.js",
+    "src/web/**",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": ">=0.1.1-rc.2 <0.3.0"
+  },
+  "scripts": {
+    "test": "node --test test/",
+    "check": "node --check src/*.js"
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "engines": {
+      "dsh": ">=0.1.1-rc.2 <0.3.0"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-layout"
+      ],
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-agent": ">=0.1.1-rc.2 <0.3.0",
+    "@deepseek-ai/dsh-commands": ">=0.1.1-rc.2 <0.3.0",
+    "@deepseek-ai/dsh-llm": ">=0.1.1-rc.2 <0.3.0",
+    "@deepseek-ai/dsh-tools": ">=0.1.1-rc.2 <0.3.0",
+    "react": "^18.2.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/414s857/dsh-codesentry.git"
+  },
+  "homepage": "https://github.com/414s857/dsh-codesentry#readme",
+  "bugs": {
+    "url": "https://github.com/414s857/dsh-codesentry/issues"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "code-audit",
+    "audit-skill",
+    "security"
+  ],
+  "license": "MIT"
+}
