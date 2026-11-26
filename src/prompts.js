@@ -351,4 +351,324 @@ export const BUILTIN_PROMPTS = [
 严重级别：认证绕过或任意数据读取为 high/critical；受限为 medium。
 对应 CWE：NoSQL 注入 CWE-943、LDAP 注入 CWE-90、XPath 注入 CWE-643、日志注入 CWE-117。`,
   },
+  {
+    name: "GraphQL 安全",
+    category: "接口",
+    default_severity: "high",
+    content: `审计目标：找出 GraphQL 接口的注入、越权、信息暴露与拒绝服务问题。
+检查清单：
+1. 内省（__schema / introspection）是否在生产开放，暴露全部类型与字段。
+2. 字段级授权：是否只在校验 resolver 参数而无对象层/字段级归属校验（可越权读取他人数据）。
+3. 通过嵌套/别名/片段对同一查询做批量放大（别名爆破、深层嵌套、循环片段）导致资源耗尽。
+4. 查询深度/复杂度/批量数是否限流；是否禁用或限制 batching（一次请求多查询）。
+5. 参数进入 SQL / NoSQL / 命令 / 模板等下游 sink 时是否仍参数化；GraphQL 不等于自动安全。
+判定标准：不可信查询能越权访问数据、触发下游注入或造成可控资源耗尽。
+误报排除：生产关闭内省、有深度/复杂度限制、字段级鉴权完整、resolver 层已参数化。
+严重级别：越权读取敏感数据为 high/critical；无限制 DoS 为 medium/high；仅内省暴露为 low。
+对应 CWE：CWE-284（访问控制不当）、CWE-770（资源分配无限制）、CWE-943（查询语义注入）。`,
+  },
+  {
+    name: "WebSocket 与实时通信安全",
+    category: "网络",
+    default_severity: "high",
+    content: `审计目标：找出 WebSocket / SSE / 长连接通道上的鉴权、来源校验与消息信任缺陷。
+检查清单：
+1. 握手阶段的鉴权：是否在 upgrade 之前校验会话/令牌，还是任意连接都可建立（跨站 WebSocket 劫持）。
+2. Origin 校验：是否校验 Origin 头，防止恶意页面借用户 Cookie 建立连接。
+3. 消息信任：服务端是否把收到的消息当作已认证用户的可信指令（未绑定连接与用户身份），可出现客户端伪造 userId/role。
+4. 消息进入下游 sink（SQL、命令、广播模板、反序列化）时是否校验与编码。
+5. 广播/订阅的频道鉴权：是否允许订阅他人频道、消息是否越权投递。
+判定标准：可在未授权或不属己的上下文中收发消息、冒用身份或注入下游。
+误报排除：握手强制鉴权、Origin 白名单、消息与连接身份强绑定、频道级鉴权完整。
+严重级别：身份冒用/越权数据为 high/critical；仅 Origin 缺失为 medium。
+对应 CWE：CWE-1385（跨站 WebSocket 劫持）、CWE-306（缺少鉴权）、CWE-284。`,
+  },
+  {
+    name: "JWT 与会话令牌安全",
+    category: "认证",
+    default_severity: "high",
+    content: `审计目标：找出 JWT / 签名令牌在生成、校验、传递全链路上的缺陷。
+检查清单：
+1. 算法混淆：是否信任令牌头 alg（none、HS256 用公钥当 HMAC 密钥、RS/HS 混用）、是否固定期望算法。
+2. 签名密钥：是否硬编码/弱密钥/可枚举，是否与业务密钥复用。
+3. 校验缺失：是否只解码不验签、是否忽略 exp/nbf/iat、是否忽略 aud/iss。
+4. 存储与传递：是否放在 URL、localStorage（可被 XSS 读取）、日志中；是否可被重放（无 jti/吊销机制）。
+5. kid 头：是否用 kid 拼接文件路径或 SQL（kid 注入）；jku/x5u 是否加载外部密钥 URL（SSRF/密钥劫持）。
+判定标准：可伪造/篡改令牌获得他人或更高身份，或令牌被泄露/可重放。
+误报排除：算法固定、密钥来自安全随机、全字段校验、短期有效+可吊销。
+严重级别：可伪造任意身份为 critical；弱密钥/可重放为 high；存储不当为 medium。
+对应 CWE：CWE-347（签名校验不当）、CWE-345（来源真实性不足）、CWE-798（硬编码凭据）、CWE-613（会话过期不足）。`,
+  },
+  {
+    name: "XXE 与 XML 解析安全",
+    category: "文件",
+    default_severity: "high",
+    content: `审计目标：找出 XML 解析器未禁用外部实体、外部 DTD 与危险扩展的位置。
+检查清单：
+1. 解析入口：DocumentBuilderFactory、SAXParserFactory、XMLInputFactory、XMLReader、libxml/SimpleXML、Python xml.etree/lxml、.NET XmlReader/XmlDocument。
+2. 是否显式禁用：disallow-doctype-decl、external-general-entities、external-parameter-entities、LOAD_EXTERNAL_DTD、XMLConstants.FEATURE_SECURE_PROCESSING。
+3. 是否允许 XInclude、是否解析用户上传/SOAP/配置的 XML。
+4. 盲 XXE：即使不回显，是否可通过外部 DTD 造成 SSRF、文件探测、OOB 数据外带（DNS/HTTP 回连）。
+5. 是否接受用户可控的 XSLT / 外部样式表（XSLT 可执行代码）。
+判定标准：XML 可读取本地文件、发起内网请求或触发 OOB 外带。
+误报排除：解析器已关闭 DOCTYPE 与外部实体、输入为可信内部数据。
+严重级别：读敏感文件/SSRF 内网为 critical/high；仅可探测为 medium。
+对应 CWE：CWE-611（XXE）、CWE-776（DTD 实体膨胀/Billion Laughs）、CWE-918（SSRF）。`,
+  },
+  {
+    name: "HTTP 安全头与传输安全",
+    category: "配置",
+    default_severity: "low",
+    content: `审计目标：找出缺失的安全响应头、不安全的传输与 Cookie 配置。
+检查清单：
+1. 传输：是否强制 HTTPS、是否启用 HSTS（含 preload/subDomains）、是否存在混合内容、TLS 是否使用弱协议/套件。
+2. 响应头：CSP（是否缺失或含 unsafe-inline/unsafe-eval/过宽）、X-Content-Type-Options、X-Frame-Options/frame-ancestors、Referrer-Policy、Permissions-Policy。
+3. Cookie：是否设置 Secure、HttpOnly、SameSite；作用域 Domain/Path 是否过宽；是否在子域间共享。
+4. CORS：Access-Control-Allow-Origin 是否为 * 或反射 Origin 而 Allow-Credentials=true（跨域读敏感数据）。
+5. 缓存：敏感响应是否缺少 Cache-Control: no-store，是否被共享缓存缓存。
+判定标准：缺失的控制使攻击者可实施降级、点击劫持、跨域读取、窃取 Cookie 或缓存敏感数据。
+误报排除：已有等效控制（如 CSP 通过 frame-ancestors 覆盖）、纯内部无浏览器场景。
+严重级别：CORS 反射 Origin+凭据为 high；缺失 HSTS/安全头为 low/medium；Cookie 缺 HttpOnly/Secure 为 medium。
+对应 CWE：CWE-693（保护机制失效）、CWE-1021（点击劫持）、CWE-942（CORS 过宽）、CWE-614（Cookie 缺 Secure）、CWE-319（明文传输）。`,
+  },
+  {
+    name: "敏感文件、备份与目录暴露",
+    category: "配置",
+    default_severity: "medium",
+    content: `审计目标：找出可被直接访问的敏感静态资源、备份、版本库与调试产物。
+检查清单：
+1. 版本控制与 IDE：.git/、.svn/、.hg/、.idea/、.vscode/、.DS_Store 可访问。
+2. 备份与临时：*.bak、*.old、*.swp、*~、*.sql、*.zip、*.tar.gz、数据库文件、日志文件。
+3. 配置与密钥：.env、config.*、application.yml、web.config、id_rsa、*.pem、credentials 的 Web 可访问性。
+4. 目录列表：静态目录开启 autoindex/Index of，可枚举文件。
+5. 构建产物：source map（.map）暴露源码、Swagger/Actuator/phpinfo/调试页面可访问。
+判定标准：上述文件可通过 HTTP 直接下载并含敏感信息或可辅助进一步利用。
+误报排除：返回 403/404、文件已脱敏、仅含公开示例数据。
+严重级别：泄露凭据/源码/数据库为 high/critical；目录列表/调试信息为 medium；仅冗余静态资源为 low。
+对应 CWE：CWE-538（文件与目录暴露）、CWE-548（目录列表）、CWE-527（版本库暴露）、CWE-540（源码泄露）。`,
+  },
+  {
+    name: "数据完整性与不安全传输",
+    category: "加密",
+    default_severity: "medium",
+    content: `审计目标：找出缺少完整性保护、可被篡改或明文传输的敏感数据。
+检查清单：
+1. 加密无认证：使用 CBC/CTR 等非 AEAD 模式却无 MAC，可被位翻转/填充预言攻击。
+2. 序列化/令牌无签名：Cookie、隐藏字段、URL 参数承载状态却未加签（如 role=admin 明文）。
+3. 下载/更新无校验：客户端更新包、远程配置、插件是否校验签名或哈希，是否可被中间人替换。
+4. 明文传输：敏感数据通过 HTTP、FTP、明文邮件或未加密消息队列传输。
+5. 哈希用于完整性却用弱算法（MD5/SHA1）或长度扩展可绕过。
+判定标准：可篡改受保护数据而不被发现，或敏感数据可被截获。
+误报排除：使用 AEAD（GCM/ChaCha20-Poly1305）、HMAC 覆盖、全链路 TLS 且证书校验开启。
+严重级别：可篡改授权/支付/更新为 high/critical；一般完整性缺失为 medium。
+对应 CWE：CWE-353（缺少完整性校验）、CWE-345（真实性不足）、CWE-319（明文传输）、CWE-347。`,
+  },
+  {
+    name: "日志注入与不安全日志实践",
+    category: "配置",
+    default_severity: "low",
+    content: `审计目标：找出用户输入写入日志导致伪造/污染，以及日志泄露敏感信息的问题。
+检查清单：
+1. 日志注入：用户输入（UA、参数、文件名、Header）未清洗写入日志，含 CRLF 可伪造日志行、污染 SIEM/审计。
+2. 敏感信息入日志：令牌、密码、完整身份证/银行卡、Cookie、完整请求体被记录。
+3. 日志文件本身可被 Web 访问或权限过宽（world-readable）。
+4. 日志内容进入下游（日志分析、ELK、Splunk）时是否被当作可信数据执行/渲染（存储型注入）。
+5. 审计日志是否可被用户删除/篡改（缺少完整性、可绕过的日志级别）。
+判定标准：可伪造/污染审计记录、或以明文形式泄露敏感信息。
+误报排除：日志脱敏、结构化日志转义换行、访问控制严格。
+严重级别：可篡改审计/泄露凭据为 medium/high；一般日志注入为 low。
+对应 CWE：CWE-117（日志注入）、CWE-532（日志泄露敏感信息）、CWE-778（日志不足）。`,
+  },
+  {
+    name: "文件包含与动态加载",
+    category: "文件",
+    default_severity: "high",
+    content: `审计目标：找出用不可信输入决定加载/包含/require 的文件或模块的位置。
+检查清单：
+1. 本地/远程文件包含：include/require/import（PHP）、模板 include、动态 import、LoadLibrary/dlopen、Class.forName。
+2. 是否允许协议包装器（php://filter、php://input、data://、expect://）或远程 URL 加载。
+3. 路径是否可穿越到系统文件或上传目录；是否拼接用户输入。
+4. 动态类加载/反射：用户可控类名/方法名（Class.forName、BeanShell）；模块加载路径可写目录。
+5. 反序列化/配置加载器（SnakeYAML、yaml.load、pickle）是否可从不可信路径加载。
+判定标准：不可信输入可改变被包含/加载的文件或模块，导致读源码、执行代码或加载恶意模块。
+误报排除：包含路径来自白名单常量、无用户可控成分。
+严重级别：可包含任意文件或加载任意代码为 critical/high；仅可读受限文件为 medium。
+对应 CWE：CWE-98（PHP 文件包含）、CWE-829（引入不可信功能）、CWE-470（不安全反射）、CWE-706。`,
+  },
+  {
+    name: "多租户隔离与数据边界",
+    category: "访问控制",
+    default_severity: "critical",
+    content: `审计目标：找出 SaaS/多租户系统中租户数据未隔离、可跨租户访问的问题。
+检查清单：
+1. 所有查询是否强制带 tenant_id/org_id 条件，还是依赖当前会话注入；是否存在缺条件的查询。
+2. tenant 标识是否来自客户端可控参数（Header、Body、子域）而未与登录态绑定。
+3. 缓存键、队列 topic、文件存储路径、对象存储前缀是否含租户维度，避免串号。
+4. 后台/管理员/导出/批处理任务是否跨租户泄漏数据；报表聚合是否越界。
+5. 软删除与回收站、备份、搜索索引是否隔离租户。
+判定标准：可通过参数/身份横移到其他租户读取或写入数据。
+误报排除：租户维度在数据层强制（RLS/中间件统一注入）且无法被客户端覆盖。
+严重级别：跨租户读写数据为 critical；隔离不完整但受限为 high。
+对应 CWE：CWE-639（IDOR）、CWE-284（访问控制不当）、CWE-566（授权绕过）。`,
+  },
+  {
+    name: "批量赋值与参数篡改",
+    category: "访问控制",
+    default_severity: "high",
+    content: `审计目标：找出请求参数可直接绑定到实体/模型，从而篡改敏感字段的问题。
+检查清单：
+1. 框架自动绑定：Spring @ModelAttribute、Jackson/Rails strong params 缺失、Django ModelForm fields='__all__'、Laravel fillable 未设。
+2. 敏感字段是否可被提交：role、is_admin、is_staff、balance、credit、price、status、ownerId、tenantId、verified、permissions。
+3. 只读/派生字段、内部字段是否被暴露到请求契约。
+4. 更新接口是否“取请求体整对象 save”，而非仅更新允许的字段。
+5. 是否存在 DTO 与实体分离、白名单字段映射。
+判定标准：客户端可提交业务上不应由用户控制的字段并获得利益或提权。
+误报排除：使用显式字段白名单 DTO、敏感字段服务端强制覆盖。
+严重级别：提权/资金篡改为 critical/high；状态误导为 medium。
+对应 CWE：CWE-915（批量赋值）、CWE-639、CWE-840（业务逻辑）。`,
+  },
+  {
+    name: "缓存投毒与缓存欺骗",
+    category: "网络",
+    default_severity: "medium",
+    content: `审计目标：找出 CDN/反向代理/应用缓存把不可信或错误内容缓存给其他用户的问题。
+检查清单：
+1. 缓存键是否包含所有影响响应的输入（Header、Cookie、扩展名、查询参数）；是否存在 unkeyed input（X-Forwarded-Host、X-Original-URL、部分 Cookie）。
+2. Web 缓存欺骗：路径后缀（/profile.css、/a.js）使 CDN 缓存动态敏感页，被他人读取。
+3. Host 头/绝对 URL 注入是否被缓存（影响密码重置链接、重定向、脚本 src）。
+4. Cache-Control/Vary 缺失导致个性化响应被公共缓存。
+5. 缓存键规范化差异（大小写、编解码、分号参数、末尾斜杠）导致的绕过。
+判定标准：攻击者可让缓存向他人返回攻击者构造或他人私有的内容。
+误报排除：缓存键完整、Vary 正确、敏感响应 no-store、无未键控输入。
+严重级别：缓存欺骗读取他人数据为 high；一般投毒为 medium。
+对应 CWE：CWE-525（Web 缓存信息泄露）、CWE-444（请求走私相关）、CWE-644（Host 头不当）。`,
+  },
+  {
+    name: "拒绝服务与资源耗尽",
+    category: "业务逻辑",
+    default_severity: "medium",
+    content: `审计目标：找出可被低成本放大的资源耗尽、算法复杂度过高与无限制操作。
+检查清单：
+1. 正则灾难性回溯（ReDoS）：用户可控字符串进入复杂正则（嵌套量词）。
+2. 无限制上传大小/数量、无分页上限的列表查询、无速率限制的昂贵接口（导出、报表、图片处理、邮件发送）。
+3. XXE/解压/JSON 深层嵌套（深度炸弹）、超大 XML（Billion Laughs）导致内存/CPU 耗尽。
+4. 密码哈希/加密参数可被操纵（bcrypt 成本来自请求）、批处理可被无限触发。
+5. 连接池/线程/队列耗尽：长耗时操作占满资源。
+判定标准：单个或少量请求即可显著消耗资源、影响可用性。
+误报排除：有大小/速率/复杂度上限与超时、隔离执行。
+严重级别：可稳定拖垮服务为 high；局部放大为 medium。
+对应 CWE：CWE-400（资源消耗不受控）、CWE-1333（ReDoS）、CWE-770（分配无限制）、CWE-776。`,
+  },
+  {
+    name: "CI/CD 与构建脚本安全",
+    category: "依赖",
+    default_severity: "high",
+    content: `审计目标：找出流水线、构建钩子与部署脚本中的注入与密钥泄露。
+检查清单：
+1. 注入：不可信输入（PR 标题、分支名、issue 内容、commit message）进入 shell/run 步骤；GitHub Actions 的 github.event.* 上下文拼接进 run。
+2. 权限：工作流 token 权限过宽（write-all）、pull_request_target 触发外部代码、自托管 runner 被不可信提交执行。
+3. 密钥：CI 变量是否可能被打印、是否通过环境暴露给不可信步骤、是否可被 fork PR 读取。
+4. 依赖与制品：构建是否拉取未签名/可被投毒的依赖或镜像，缓存投毒。
+5. postinstall/prepare 脚本、Makefile、Dockerfile 中的动态下载与 curl|bash。
+判定标准：外部可控输入可执行任意命令或窃取 CI 密钥/制品。
+误报排除：输入经严格校验/引号转义、权限最小化、无不可信触发。
+严重级别：可执行命令/窃取密钥为 critical/high；配置不当为 medium。
+对应 CWE：CWE-78（命令注入）、CWE-829（引入不可信功能）、CWE-522（凭据保护不足）、CWE-94。`,
+  },
+  {
+    name: "数据库与存储层安全",
+    category: "配置",
+    default_severity: "high",
+    content: `审计目标：找出数据存储层配置与访问控制缺陷（非注入类）。
+检查清单：
+1. 凭据与网络：数据库默认/弱口令、监听 0.0.0.0、无 TLS、未加 IP 白名单、端口对公网暴露。
+2. 权限：应用账号是否过度授权（DDL/多库/root），读写账号是否分离。
+3. 对象存储（S3/OSS/MinIO）：Bucket 是否 public、ACL 过宽、预签名 URL 有效期过长或无鉴权、路径可枚举。
+4. 数据保护：是否需要加密的敏感列明文存储、备份文件可下载、无行级/列级访问控制。
+5. 缓存（Redis/Memcached）：未鉴权、可公网访问、绑定地址过宽。
+判定标准：可直接访问或越权读写存储数据，或凭据/配置暴露。
+误报排除：仅内网+白名单+强口令+最小权限。
+严重级别：公网可写/可读敏感数据为 critical/high；配置弱化为 medium。
+对应 CWE：CWE-306（缺少鉴权）、CWE-798、CWE-521（弱口令）、CWE-284、CWE-1188（默认配置不安全）。`,
+  },
+  {
+    name: "开放端口与服务指纹暴露",
+    category: "配置",
+    default_severity: "medium",
+    content: `审计目标：找出代码/配置中暴露的可利用内部服务与调试端口。
+检查清单：
+1. 生产启用的调试/管理端口：JVM debug（5005）、JMX、Actuator、admin、profiler、php-fpm status。
+2. 暴露的中间件：Redis、MongoDB、Elasticsearch、RabbitMQ、etcd、Docker API（2375）、Kubernetes API 无鉴权。
+3. 硬件/监控/运维接口（prometheus、grafana、jenkins）弱口令或匿名访问。
+4. 服务指纹：版本响应头、错误页框架版本，是否暴露已知 CVE 的版本。
+5. 绑定地址：是否监听 0.0.0.0 而非 127.0.0.1/内网。
+判定标准：可从外部触达本应内部的服务，且存在弱鉴权或无鉴权。
+误报排除：仅内网可达、已鉴权、非生产环境。
+严重级别：无鉴权可达 RCE/数据（Docker API、Redis）为 critical/high；仅指纹暴露为 low。
+对应 CWE：CWE-306（缺少鉴权）、CWE-1188（默认配置不安全）、CWE-200（信息暴露）、CWE-16（配置）。`,
+  },
+  {
+    name: "业务逻辑与流程绕过",
+    category: "业务逻辑",
+    default_severity: "high",
+    content: `审计目标：找出可绕过业务约束、滥用流程获取不当利益的问题。
+检查清单：
+1. 顺序绕过：跳过前序步骤（未支付下单、跳过 KYC、跳过验证）直接进入后续状态。
+2. 数量/额度：负数、超大值、边界值（0、-1、int 溢出）绕过金额/数量校验；负数退款。
+3. 优惠券/积分/邀请：重复领取、自邀、叠加、条件伪造、时间窗口绕过。
+4. 状态机：非法状态跳转（已取消订单再支付、已退款再退）、并发状态竞争。
+5. 权限相关流程：审批流自批、越级审批、密保问题/找回流程可绕过。
+判定标准：可完成业务上不允许的操作或获取超出规则的利益。
+误报排除：服务端对每一步做完整状态与金额校验、有权威数据源。
+严重级别：直接资金/权益损失为 critical/high；状态不一致为 medium。
+对应 CWE：CWE-840（业务逻辑错误）、CWE-841（行为顺序不当）、CWE-20（输入校验不足）。`,
+  },
+  {
+    name: "文件与目录权限、命令执行上下文",
+    category: "配置",
+    default_severity: "medium",
+    content: `审计目标：找出文件权限过宽、以过高权限运行与不安全临时文件问题。
+检查清单：
+1. 上传/写入的文件权限是否 world-writable/executable；目录是否允许执行脚本。
+2. 服务以 root/Administrator 运行，或子进程继承过高权限；SUID/capabilities 不当。
+3. 临时文件：可预测名（/tmp/fixed）、竞态（先创建后写入）、符号链接跟随导致覆盖敏感文件。
+4. 日志/配置/密钥文件权限允许其他用户读取。
+5. 容器：以 root 运行、特权模式、挂载 docker.sock、敏感宿主路径挂载。
+判定标准：权限配置使本地低权限用户或远程上传可提权、覆盖文件或执行命令。
+误报排除：最小权限、文件权限受限、临时文件用安全随机名+O_EXCL。
+严重级别：可提权/覆盖敏感文件为 high；一般权限松为 medium/low。
+对应 CWE：CWE-732（权限分配不当）、CWE-250（过高权限执行）、CWE-377（不安全临时文件）、CWE-59（链接跟随）。`,
+  },
+  {
+    name: "第三方集成与 Webhook 安全",
+    category: "网络",
+    default_severity: "high",
+    content: `审计目标：找出对外集成（回调、Webhook、OAuth、支付、邮件/短信）的信任与签名缺陷。
+检查清单：
+1. Webhook 接收：是否校验来源签名（HMAC、时间戳防重放）、是否可被伪造事件触发内部动作。
+2. OAuth 集成：state 参数是否校验（CSRF）、redirect_uri 严格匹配、token 交换是否校验 audience/scope。
+3. 支付回调：是否验签、金额/订单号是否与本地订单校验、是否可重放或伪造成功。
+4. 出站调用：第三方返回值是否被当作可信（注入到本地 SQL/模板/命令），是否校验 TLS 证书。
+5. 邮件/短信：发信人可控、模板注入、配额滥用、开放中继。
+判定标准：可伪造第三方事件、绕过签名或利用外部返回数据达成注入/越权。
+误报排除：严格验签+时间戳窗口+幂等、外部数据均视为不可信并转义。
+严重级别：可伪造支付/事件触发敏感操作为 critical/high；集成配置弱为 medium。
+对应 CWE：CWE-345（真实性不足）、CWE-347、CWE-352（CSRF）、CWE-918（SSRF）、CWE-601。`,
+  },
+  {
+    name: "信息泄露与侧信道",
+    category: "配置",
+    default_severity: "medium",
+    content: `审计目标：找出可推断敏感信息的响应差异、枚举与侧信道。
+检查清单：
+1. 用户枚举：登录/注册/找回接口通过不同提示（“用户不存在”vs“密码错误”）或响应时间差异暴露账号存在性。
+2. 时序侧信道：字符串比较、令牌校验用非常量时间比较（== 而非 constant-time）。
+3. 响应差异：不同权限/存在性返回不同状态码、长度、错误码，可被推断。
+4. 错误信息：堆栈、SQL 错误、内网 IP、版本号泄露。
+5. 资源枚举：自增 ID、可预测的分享链接/邀请码、目录/文件可枚举。
+判定标准：通过响应内容、状态或时间差异可推断出本不应得知的敏感信息。
+误报排除：统一通用响应、常量时间比较、限流+验证码。
+严重级别：可枚举账号/凭证推断为 medium/high；一般信息泄露为 low。
+对应 CWE：CWE-203（可观察差异）、CWE-208（可观察时序差异）、CWE-204（响应差异）、CWE-200（信息暴露）。`,
+  },
 ]

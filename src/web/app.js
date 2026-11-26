@@ -555,7 +555,9 @@ function renderTasks() {
             : `<button class="btn small primary" data-action="run-task" data-id="${task.id}">运行</button>`}
         <button class="btn small" data-action="edit-task" data-id="${task.id}">编辑</button>
         <button class="btn small" data-action="report-task" data-id="${task.id}">导出报告</button>
-        <button class="btn small" data-action="toggle-task" data-id="${task.id}" data-enabled="${task.enabled ? '1' : '0'}">${task.enabled ? '停用调度' : '启用调度'}</button>
+        ${task.schedule_type === 'manual'
+          ? ''
+          : `<button class="btn small" data-action="toggle-task" data-id="${task.id}" data-enabled="${task.enabled ? '1' : '0'}">${task.enabled ? '停用调度' : '启用调度'}</button>`}
         <button class="btn small danger" data-action="delete-task" data-id="${task.id}">删除</button>
       </div></td>
     </tr>`

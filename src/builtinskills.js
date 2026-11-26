@@ -101,6 +101,8 @@ const WEB_METHODOLOGY_REF = `# Web 审计常见框架速查
 - 入口：readObject、XStream.fromXML、JSON.parseObject(autoType)、Hessian readObject。
 - 链：CommonsCollections、CommonsBeanutils、Spring、Groovy、JdbcRowSetImpl(JNDI)。`
 
+import { EXTRA_SKILLS } from './builtinskills_extra.js'
+
 /**
  * 内置示范 Skill 列表。字段与 store.createSkill 的入参对齐。
  * references 为 [{ path, content }]，会在组装 Skill 提示时被内联。
@@ -170,4 +172,5 @@ export const BUILTIN_SKILLS = [
       },
     ],
   },
+  ...EXTRA_SKILLS,
 ]

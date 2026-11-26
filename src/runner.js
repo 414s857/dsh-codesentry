@@ -644,7 +644,7 @@ export class AuditRunner {
     // DSH 的会话按 cwd 归入工作区：只有存在一个 path 等于会话 cwd 的工作区，
     // 会话才会被收纳。这里在启动前确保该代码目录已注册为工作区（幂等，
     // 已存在则复用）。失败不影响审计本身。
-    await this.ensureWorkspace(task.repo_path)
+    const workspaceId = await this.ensureWorkspace(task.repo_path)
 
     // Sharded mode persists every slice up front so coverage survives restarts.
     let shardRecords = []
@@ -682,7 +682,7 @@ export class AuditRunner {
       }
       if (selection.reasoningEffort) agentOptions.reasoningEffort = selection.reasoningEffort
 
-      const sessionEnv = { createUserMessage, agents, presets, agentOptions, scaScan }
+      const sessionEnv = { createUserMessage, agents, presets, agentOptions, scaScan, workspaceId }
       if (sharded) {
         // Each slice runs in its own fresh session with its own read-file
         // ledger; the runner advances to the next slice when the session goes
@@ -698,6 +698,8 @@ export class AuditRunner {
             this.applyReadOnlyEnforcement(agentCtx)
           },
         })
+        // 会话已创建，挂到对应工作区，避免落到“未分组”。
+        await this.attachSessionToWorkspace(workspaceId, sessionId)
         this.active.set(run.id, {
           handle,
           taskId,
@@ -874,7 +876,7 @@ export class AuditRunner {
       .map(id => this.store.getPrompt(id))
       .filter(prompt => prompt && prompt.enabled !== false)
 
-    const { createUserMessage, agents, presets, agentOptions } = sessionEnv
+    const { createUserMessage, agents, presets, agentOptions, workspaceId } = sessionEnv
     const sessionId = randomUUID()
     const handle = await agents.create({
       sessionId,
@@ -888,6 +890,8 @@ export class AuditRunner {
         this.applyReadOnlyEnforcement(agentCtx)
       },
     })
+    // 每个切片会话创建后同样挂到工作区，保证切片审计的会话也归组正确。
+    await this.attachSessionToWorkspace(workspaceId, sessionId)
 
     const doneCount = doneOverride ?? shards.filter(shard => shard.status === 'completed').length
     const entry = {
@@ -1078,7 +1082,7 @@ export class AuditRunner {
     const shards = this.store.listShards(runId)
     const findings = this.store.listFindings({ taskId: run.task_id, runId })
 
-    const { createUserMessage, agents, presets, agentOptions } = sessionEnv
+    const { createUserMessage, agents, presets, agentOptions, workspaceId } = sessionEnv
     const sessionId = randomUUID()
     const handle = await agents.create({
       sessionId,
@@ -1092,6 +1096,8 @@ export class AuditRunner {
         this.applyReadOnlyEnforcement(agentCtx)
       },
     })
+    // 聚合会话同样挂到工作区。
+    await this.attachSessionToWorkspace(workspaceId, sessionId)
 
     const entry = {
       handle,
@@ -1197,7 +1203,7 @@ export class AuditRunner {
   }
 
   async startReview(runId, sourceEntry, findings) {
-    const { createUserMessage, agents, presets, agentOptions } = sourceEntry.sessionEnv
+    const { createUserMessage, agents, presets, agentOptions, workspaceId } = sourceEntry.sessionEnv
     const sessionId = randomUUID()
     const handle = await agents.create({
       sessionId,
@@ -1211,6 +1217,8 @@ export class AuditRunner {
         this.applyReadOnlyEnforcement(agentCtx)
       },
     })
+    // 复核会话同样挂到工作区。
+    await this.attachSessionToWorkspace(workspaceId, sessionId)
 
     const entry = {
       handle,
@@ -2099,23 +2107,53 @@ export class AuditRunner {
    * 失败（旧版 DSH 无该控制器、目录不存在等）都静默忽略，不影响审计。
    */
   async ensureWorkspace(repoPath) {
-    if (!repoPath) return
+    if (!repoPath) return null
     try {
       const controller = this.ctx.get?.('workspaceController')
         ?? this.ctx.workspaceController
         ?? this.ctx.remote?.workspace
-      if (!controller?.create) return
+      if (!controller?.create) return null
       const result = await controller.create({ path: repoPath })
-      // 新创建的工作区用目录名作为标题，便于在侧栏辨认。
+      // WorkspaceController returns a WorkspaceView whose identity field is
+      // `workspaceId` (not `id`) — reading the wrong field silently dropped the
+      // workspace id and made attach impossible. Normalise both spellings.
       const workspace = result?.workspace
-      if (result?.created && workspace && !workspace.title?.()) {
+      const workspaceId = workspace?.workspaceId ?? workspace?.id ?? null
+      // 新创建的工作区用目录名作为标题，便于在侧栏辨认。
+      if (result?.created && workspace && !workspace.title) {
         const base = repoPath.split(/[\\/]/).filter(Boolean).pop() || repoPath
-        const rename = controller.rename?.({ workspaceId: workspace.id ?? workspace.id?.(), title: base })
+        const rename = controller.rename?.({ workspaceId, title: base })
         if (rename?.catch) rename.catch(() => {})
         else if (rename && typeof rename.then === 'function') rename.then(() => {}, () => {})
       }
+      return workspaceId
     } catch {
       // 工作区归组是锦上添花，绝不让它阻断审计。
+      return null
+    }
+  }
+
+  /**
+   * Attach one freshly created audit session to its workspace so it lands in the
+   * correct sidebar partition instead of “未分组”. The runner creates sessions
+   * via the `agents` service directly (bypassing SessionController.create), so
+   * nothing attaches the session id to the workspace — we must do it here. The
+   * workspace entity validates that the session's stored cwd resolves to the
+   * workspace path; the session was created with cwd = task.repo_path, which is
+   * the same path the workspace was registered for, so the check passes.
+   * Best-effort: attachment never blocks or fails an audit.
+   */
+  async attachSessionToWorkspace(workspaceId, sessionId) {
+    if (!workspaceId || !sessionId) return
+    try {
+      const registry = this.ctx.get?.('workspaceRegistry')
+        ?? this.ctx.workspaceRegistry
+        ?? this.ctx.remote?.workspaceRegistry
+      const entity = registry?.get?.(workspaceId)
+      if (!entity?.attachSession) return
+      await entity.attachSession(sessionId)
+    } catch {
+      // 归组失败不影响审计：会话仍可运行，只是会落到“未分组”。
     }
   }
 
