@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { buildTaskReport } from './report.js'
@@ -102,7 +103,7 @@ async function handleApi(req, res, url, route, context) {
   }
 
   if (resource === 'fs' && segments[1] === 'dirs' && method === 'GET') {
-    handleDirectoryList(res, url)
+    handleDirectoryList(res, url, context)
     return
   }
 
@@ -168,11 +169,11 @@ async function handleApi(req, res, url, route, context) {
       if (body.defaultProvider !== undefined) store.setSetting('defaultProvider', String(body.defaultProvider).trim())
       if (body.defaultModel !== undefined) store.setSetting('defaultModel', String(body.defaultModel).trim())
       if (body.auditApiToken !== undefined) store.setSetting('auditApiToken', String(body.auditApiToken).trim())
-      sendJson(res, 200, { settings: store.allSettings() })
+      sendJson(res, 200, { settings: store.allSettings({ maxTokensPerRun: 3_000_000 }) })
       return
     }
     if (method === 'GET') {
-      sendJson(res, 200, { settings: store.allSettings() })
+      sendJson(res, 200, { settings: store.allSettings({ maxTokensPerRun: 3_000_000 }) })
       return
     }
   }
@@ -642,9 +643,57 @@ async function handleRuns(req, res, segments, context) {
   throw httpError(404, '接口不存在')
 }
 
-/** List child directories for the task form's directory picker. */
-function handleDirectoryList(res, url) {
+/** Directories that are essentially never an audit target — hide from the picker. */
+const DIR_PICKER_SKIP = new Set([
+  'node_modules', '.git', '.svn', '.hg', 'dist', 'build', 'out', 'coverage',
+  '__pycache__', '.venv', 'venv', '.cache', '.idea', '.vscode', '.next', '.nuxt',
+  'tmp', 'temp',
+])
+
+/**
+ * List child directories for the task form's directory picker.
+ *
+ * Empty `path` returns a helpful landing view instead of bare drive letters:
+ * `home`, a handful of `quick` shortcuts (Desktop/Documents/common dev roots
+ * that actually exist) and `recent` repos drawn from previously created tasks.
+ * The client uses these to let the user jump straight to where their code lives
+ * rather than drilling down from "C:\".
+ */
+function handleDirectoryList(res, url, context) {
   const raw = String(url.searchParams.get('path') ?? '').trim()
+  const store = context?.store
+  const home = homedir()
+  const exists = p => {
+    try { return statSync(p).isDirectory() } catch { return false }
+  }
+  const quickCandidates = [
+    { name: '主目录', path: home },
+    { name: '桌面', path: join(home, 'Desktop') },
+    { name: '文档', path: join(home, 'Documents') },
+    { name: '代码', path: join(home, 'Code') },
+    { name: 'Projects', path: join(home, 'Projects') },
+    { name: 'repos', path: join(home, 'repos') },
+    { name: 'projects', path: join(home, 'projects') },
+    { name: 'workspace', path: join(home, 'workspace') },
+  ]
+  const quick = quickCandidates.filter(item => exists(item.path))
+  // Distinct repo paths from existing tasks, most-recent first.
+  let recent = []
+  if (store) {
+    try {
+      const seen = new Set()
+      for (const task of store.listTasks()) {
+        const repo = String(task.repo_path ?? '').trim()
+        if (!repo || seen.has(repo) || !exists(repo)) continue
+        seen.add(repo)
+        recent.push(repo)
+        if (recent.length >= 8) break
+      }
+    } catch {
+      recent = []
+    }
+  }
+
   if (!raw) {
     const roots = process.platform === 'win32'
       ? 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map(letter => `${letter}:\\`).filter(path => existsSync(path))
@@ -652,6 +701,9 @@ function handleDirectoryList(res, url) {
     sendJson(res, 200, {
       path: '',
       parent: null,
+      home,
+      quick,
+      recent,
       dirs: roots.map(path => ({ name: path, path })),
     })
     return
@@ -666,10 +718,10 @@ function handleDirectoryList(res, url) {
   if (!info.isDirectory()) throw httpError(400, '所选路径不是目录')
   const parent = dirname(target)
   const dirs = readdirSync(target, { withFileTypes: true })
-    .filter(entry => entry.isDirectory())
+    .filter(entry => entry.isDirectory() && !DIR_PICKER_SKIP.has(entry.name))
     .map(entry => ({ name: entry.name, path: join(target, entry.name) }))
     .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
-  sendJson(res, 200, { path: target, parent: parent === target ? null : parent, dirs })
+  sendJson(res, 200, { path: target, parent: parent === target ? null : parent, home, quick, recent, dirs })
 }
 
 function serveStatic(res, base) {

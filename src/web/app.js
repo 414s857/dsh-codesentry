@@ -17,6 +17,7 @@ const state = {
   lastRender: 0,
   models: null,
   interactingUntil: 0,
+  renderPending: false,
 }
 
 const panel = () => document.getElementById('panel')
@@ -38,7 +39,7 @@ function fmtDate(value) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
-/** 1234567 → "1,234,567"（token 计数展示用）。 */
+/** 1234567 → "1,234,567"（大数字展示用）。 */
 function fmtNumber(value) {
   return Number(value ?? 0).toLocaleString('en-US')
 }
@@ -246,6 +247,7 @@ function openDirPicker(startPath, onPick) {
           <button class="btn small" type="button" data-dir-go>前往</button>
         </div>
         <div class="dir-crumbs" data-dir-crumbs></div>
+        <div class="dir-shortcuts" data-dir-shortcuts hidden></div>
         <div class="dir-list" data-dir-list></div>
       </div>
       <div class="modal-foot">
@@ -262,6 +264,7 @@ function openDirPicker(startPath, onPick) {
   const pathInput = overlay.querySelector('[data-dir-path]')
   const currentLabel = overlay.querySelector('[data-dir-current]')
   const crumbs = overlay.querySelector('[data-dir-crumbs]')
+  const shortcuts = overlay.querySelector('[data-dir-shortcuts]')
   const current = { path: '', parent: null }
   let closed = false
   const close = () => {
@@ -282,7 +285,7 @@ function openDirPicker(startPath, onPick) {
   const renderCrumbs = path => {
     crumbs.innerHTML = ''
     if (!path) {
-      crumbs.textContent = '请选择盘符或根目录'
+      crumbs.textContent = '请选择盘符或快捷位置'
       return
     }
     const parts = []
@@ -313,6 +316,23 @@ function openDirPicker(startPath, onPick) {
     })
   }
 
+  // 快捷位置（主目录/桌面/…）+ 最近使用的代码目录，避免每次都从盘符根部一层层点。
+  const renderShortcuts = payload => {
+    const groups = []
+    if (payload.quick?.length) groups.push({ label: '快捷位置', items: payload.quick })
+    if (payload.recent?.length) groups.push({ label: '最近使用', items: payload.recent.map(path => ({ name: basename(path), path })) })
+    if (!groups.length) {
+      shortcuts.hidden = true
+      shortcuts.innerHTML = ''
+      return
+    }
+    shortcuts.hidden = false
+    shortcuts.innerHTML = groups.map(group => `<div class="dir-shortcut-group"><span class="dir-shortcut-label">${esc(group.label)}</span>${group.items.map(item => `<button type="button" class="dir-shortcut" data-dir="${esc(item.path)}" title="${esc(item.path)}">${esc(item.name)}</button>`).join('')}</div>`).join('')
+  }
+
+  const basename = p => String(p ?? '').replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean).pop() || p
+
+  let landed = false
   const loadDirs = async path => {
     list.innerHTML = '<div class="dir-empty">加载中…</div>'
     try {
@@ -320,11 +340,17 @@ function openDirPicker(startPath, onPick) {
       current.path = payload.path
       current.parent = payload.parent
       pathInput.value = payload.path
-      currentLabel.textContent = payload.path || '未选择目录'
+      currentLabel.textContent = payload.path || (payload.home ? '请选择目录' : '未选择目录')
       renderCrumbs(payload.path)
+      renderShortcuts(payload)
       list.innerHTML = payload.dirs.length === 0
         ? '<div class="dir-empty">该目录下没有子目录</div>'
         : payload.dirs.map(dir => `<button class="dir-item" type="button" data-dir="${esc(dir.path)}" title="${esc(dir.path)}"><span class="dir-name">${esc(dir.name)}</span><span class="dir-full">${esc(dir.path)}</span></button>`).join('')
+      // 首次打开且未指定起始目录时，若拿到主目录则直接落到主目录，而不是停在盘符列表。
+      if (!landed && path === '' && payload.home) {
+        landed = true
+        loadDirs(payload.home)
+      }
     } catch (error) {
       current.path = ''
       current.parent = null
@@ -345,7 +371,7 @@ function openDirPicker(startPath, onPick) {
   overlay.querySelector('[data-dir-root]').addEventListener('click', () => loadDirs(''))
   overlay.querySelector('[data-dir-up]').addEventListener('click', () => {
     if (current.parent) loadDirs(current.parent)
-    else toast('已经是根目录', true)
+    else loadDirs('')
   })
   overlay.querySelector('[data-dir-go]').addEventListener('click', () => loadDirs(pathInput.value.trim()))
   pathInput.addEventListener('keydown', event => {
@@ -354,10 +380,12 @@ function openDirPicker(startPath, onPick) {
       loadDirs(pathInput.value.trim())
     }
   })
-  list.addEventListener('click', event => {
+  const handleChildClick = event => {
     const item = event.target.closest('[data-dir]')
     if (item) loadDirs(item.dataset.dir)
-  })
+  }
+  list.addEventListener('click', handleChildClick)
+  shortcuts.addEventListener('click', handleChildClick)
   overlay.querySelector('[data-dir-pick]').addEventListener('click', () => {
     const chosen = current.path || pathInput.value.trim()
     if (!chosen) return toast('请先选择目录', true)
@@ -400,8 +428,7 @@ async function load({ silent = false } = {}) {
     renderAll()
     if (silent) restoreScroll(snapshot)
     state.lastRender = Date.now()
-  } catch (error) {
-    if (!silent) toast(error.message, true)
+  } catch (error) {    if (!silent) toast(error.message, true)
   }
 }
 
@@ -443,10 +470,10 @@ function renderStats() {
 const PAGE_TITLES = { tasks: '审计任务', findings: '漏洞管理', prompts: '审计提示词', skills: '审计 Skill', runs: '运行记录', settings: '设置' }
 const TOP_ACTIONS = {
   tasks: '<button class="btn" data-action="export-task-report"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>导出报告</button><button class="btn primary" data-action="new-task"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>新建任务</button>',
-  findings: '',
+  findings: '<button class="btn" data-action="refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v4.5h-4.5"/></svg>刷新</button>',
   prompts: '<button class="btn primary" data-action="new-prompt"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>新建提示词</button><button class="btn" data-action="import-prompts">导入 YAML</button><button class="btn" data-action="export-prompts">导出 YAML</button>',
   skills: '<button class="btn primary" data-action="new-skill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>新建 Skill</button><button class="btn" data-action="import-skills">导入 Skill</button><button class="btn" data-action="export-skills">导出全部 ZIP</button>',
-  runs: '',
+  runs: '<button class="btn" data-action="refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v4.5h-4.5"/></svg>刷新</button>',
   settings: '',
 }
 
@@ -466,8 +493,17 @@ function renderCounts() {
   document.getElementById('count-runs').textContent = state.data.runs.length
 }
 
-function renderPanel() {
+function renderPanel({ force = false } = {}) {
   if (!state.data) return
+  // While the user is pressing/holding inside the panel (dragging a scrollbar,
+  // selecting text, mid-click) defer the rebuild: replacing innerHTML under the
+  // cursor is exactly what makes the horizontal scrollbar feel "拉不动".
+  // A deferred render is picked up by the next tick once interaction ends.
+  if (!force && Date.now() < state.interactingUntil) {
+    state.renderPending = true
+    return
+  }
+  state.renderPending = false
   const render = {
     tasks: renderTasks,
     findings: renderFindings,
@@ -602,7 +638,7 @@ function renderPrompts() {
 
   return `
     <div class="panel-head">
-      <div><h3>漏洞审计提示词 <span class="badge info">${state.data.prompts.length}</span></h3><div class="sub">提示词决定审计范围与判定标准。新建任务时只审计被选中的提示词。</div></div>
+      <div><h3>漏洞审计提示词 <span class="badge info">${state.data.prompts.length}</span></h3><div class="sub"><b>提示词 = 单一漏洞类型的审计清单</b>，可自由勾选、组合，一个任务只审计勾选的类型。选几条就审几类，最灵活。<br>想整体套用一套成熟方法论（含流程、参考文件、多步骤）时，用右侧的「审计 Skill」。</div></div>
     </div>
     <div class="panel-body"><div class="prompt-grid card-grid">${cards || '<div class="empty"><strong>暂无提示词</strong>新建或导入提示词后即可创建审计任务。</div>'}</div></div>`
 }
@@ -629,24 +665,12 @@ function renderSkills() {
 
   return `
     <div class="panel-head">
-      <div><h3>代码审计 Skill <span class="badge info">${state.data.skills.length}</span></h3><div class="sub">Skill 使用标准 SKILL.md（YAML frontmatter + Markdown 正文）与 references/ 参考文件；保存或导入后会自动同步到 <code>~/.dsh/skills</code>，可直接在会话中用 <code>/名称</code> 调用。新建任务时也可选择按 Skill 执行，审计过程完全遵循该 Skill 的规定。</div></div>
+      <div><h3>代码审计 Skill <span class="badge info">${state.data.skills.length}</span></h3><div class="sub"><b>Skill = 一整套完整的审计方法论</b>（标准 SKILL.md：YAML frontmatter + Markdown 正文 + references/ 参考文件），描述“怎么审”的全流程，可跨项目复用。保存/导入后自动同步到 <code>~/.dsh/skills</code>，任意会话都能用 <code>/名称</code> 调用。<br>和提示词的区别：提示词是按漏洞类型可自由组合的清单，Skill 是一份不可拆分、整体套用的打法。下方内置两个示范（「Web 应用全量审计方法论」「Java 反序列化深度审计」），可参考或直接使用。</div></div>
     </div>
     <div class="panel-body"><div class="prompt-grid card-grid">${cards || '<div class="empty"><strong>暂无审计 Skill</strong>新建或导入 SKILL.md 目录 / ZIP 后，即可在任务中选择按 Skill 审计。</div>'}</div></div>`
 }
 
 function renderRuns() {
-  // Token 消耗列只在有运行真正上报过用量时才出现（progress.tokensIn/tokensOut）。
-  const hasTokens = state.data.runs.some(
-    run => (run.progress?.tokensIn ?? 0) + (run.progress?.tokensOut ?? 0) > 0,
-  )
-  const tokenCell = run => {
-    const tokensIn = run.progress?.tokensIn ?? 0
-    const tokensOut = run.progress?.tokensOut ?? 0
-    if (!tokensIn && !tokensOut) return '<td class="nowrap">—</td>'
-    const cost = run.progress?.estCostUsd
-    const costNote = cost ? `<small class="path">≈$${cost.toFixed(4)}</small>` : ''
-    return `<td class="nowrap" title="输入 ${tokensIn} + 输出 ${tokensOut}">${fmtNumber(tokensIn + tokensOut)}${costNote}</td>`
-  }
   const rows = state.data.runs.map(run => `<tr>
     <td class="mono">${esc(run.id)}<small class="path">${esc(run.task_name)}</small></td>
     <td>${badge(run.status, LABELS.runStatus[run.status] ?? run.status)}</td>
@@ -655,7 +679,6 @@ function renderRuns() {
     <td class="nowrap">${esc(fmtDate(run.started_at))}</td>
     <td class="nowrap">${esc(fmtDate(run.finished_at))}</td>
     <td class="nowrap">${run.findings_count}</td>
-    ${hasTokens ? tokenCell(run) : ''}
     <td class="title-cell"><small>${esc((run.summary || run.error || '—').slice(0, 150))}</small></td>
     <td class="nowrap"><div class="btn-group">
       <button class="btn small" data-action="trajectory-run" data-id="${run.id}">运行日志</button>
@@ -673,7 +696,7 @@ function renderRuns() {
     </div>
     ${state.data.runs.length === 0
       ? '<div class="empty"><strong>暂无运行记录</strong>启动任务后这里会显示每次审计的状态、耗时与发现数量。</div>'
-      : `<div class="table-wrap"><table><thead><tr><th>运行</th><th>状态</th><th>进度</th><th>触发</th><th>开始</th><th>结束</th><th>漏洞</th>${hasTokens ? '<th>Token</th>' : ''}<th>结论</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table></div>`}`
+      : `<div class="table-wrap"><table><thead><tr><th>运行</th><th>状态</th><th>进度</th><th>触发</th><th>开始</th><th>结束</th><th>漏洞</th><th>结论</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table></div>`}`
 }
 
 function renderSettings() {
@@ -687,7 +710,7 @@ function renderSettings() {
         <form id="settings-form" class="form-grid">
           <div class="field"><label>最大并发审计数</label><input type="number" min="1" step="1" name="maxConcurrentRuns" value="${esc(settings.maxConcurrentRuns ?? 1)}"></div>
           <div class="field"><label>单次运行最大时长（分钟）</label><input type="number" min="0" max="10080" step="1" name="maxRunDurationMinutes" value="${esc(settings.maxRunDurationMinutes ?? 0)}"><div class="hint">超过此时长后运行按预算停止，0 表示不限，最大 10080（7 天）。</div></div>
-          <div class="field"><label>单次运行 token 预算</label><input type="number" min="0" max="1000000000" step="10000" name="maxTokensPerRun" value="${esc(settings.maxTokensPerRun ?? 0)}"><div class="hint">输入+输出 token 合计超过此值后运行按预算停止，0 表示不限。</div></div>
+          <div class="field"><label>单次运行 token 预算</label><input type="number" min="0" max="1000000000" step="10000" name="maxTokensPerRun" value="${esc(settings.maxTokensPerRun ?? 3000000)}"><div class="hint">输入+输出 token 合计超过此值后运行按预算停止（进度与发现保留）。默认 3000000（约 300 万），0 表示不限——不限时长仓库可能一下花掉上千万 token，建议保留上限。</div></div>
           <div class="field"><label>模型回复失败后自动续跑间隔（分钟）</label><input type="number" min="0" max="1440" step="1" name="llmRetryDelayMinutes" value="${esc(settings.llmRetryDelayMinutes ?? 5)}"><div class="hint">回复超时/失败后等待多久自动发送「继续」，0 表示立即，最大 1440（24 小时）。</div></div>
           <div class="field"><label>自动续跑次数上限</label><input type="number" min="0" max="100" step="1" name="llmRetryCount" value="${esc(settings.llmRetryCount ?? 3)}"><div class="hint">达到次数仍未成功才判定任务失败；0 表示不自动续跑。</div></div>
           <div class="field"><label>默认模型服务商（可选）</label><input name="defaultProvider" placeholder="例如 deepseek" value="${esc(settings.defaultProvider ?? '')}"><div class="hint">留空使用 DSH 默认模型。</div></div>
@@ -1349,6 +1372,11 @@ async function handleAction(action, target) {
   const skill = state.data.skills.find(item => item.id === id)
 
   if (action === 'new-task') return openTaskModal(null)
+  if (action === 'refresh') {
+    await load()
+    toast('已刷新')
+    return
+  }
   if (action === 'edit-task' && task) return openTaskModal(task)
   if (action === 'report-task' && task) return openReportModal(task)
   if (action === 'new-prompt') return openPromptModal(null)
@@ -1565,7 +1593,7 @@ function bindEvents() {
     state.tab = tab.dataset.tab
     document.querySelectorAll('.tab').forEach(node => node.classList.toggle('active', node === tab))
     renderPageChrome()
-    renderPanel()
+    renderPanel({ force: true })
   })
 
   document.getElementById('top-actions').addEventListener('click', event => {
@@ -1596,6 +1624,12 @@ async function poll() {
   if (Date.now() < state.interactingUntil) return
   const active = document.activeElement
   if (active && active.closest('#panel') && ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName)) return
+  // A render deferred during interaction (scrollbar drag, text selection) is
+  // flushed here once the freeze window has elapsed.
+  if (state.renderPending) {
+    renderPanel({ force: true })
+    state.renderPending = false
+  }
   await load({ silent: true })
 }
 

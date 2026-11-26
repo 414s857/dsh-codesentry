@@ -32,7 +32,10 @@ const IGNORED_EXTENSIONS = new Set([
 
 /** Hard caps so a pathological tree can never stall the plugin. */
 const MAX_WALK_FILES = 20000
-const DEFAULT_SHARD_FILE_COUNT = 120
+// 每个切片承载的文件数上限。调大（120→200）后切片更少、会话更少：分片审计的
+// 主要开销是每个会话都要重复注入同一份审计指令与漏洞清单，切片越少越省 token。
+// 单切片 200 个文件仍可在一次会话上下文内读完，兼顾覆盖与成本。
+const DEFAULT_SHARD_FILE_COUNT = 200
 const DEFAULT_MAX_SHARDS = 12
 /** Files larger than this are skipped: reading them wastes the session budget. */
 const MAX_FILE_BYTES = 400 * 1024

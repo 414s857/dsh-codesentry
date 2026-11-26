@@ -33,6 +33,12 @@ const HEARTBEAT_MS = 3000
 const MAX_RUN_DURATION_CEILING_MS = 7 * 24 * 60 * 60 * 1000
 /** Hard cap for the token budget so a mistyped setting cannot disable it. */
 const MAX_TOKENS_CEILING = 1_000_000_000
+/**
+ * 默认单次运行的 token 预算（约 300 万）。0 表示不限，但历史上有用户在这个
+ * 默认值上“一会就花了 10M”，因此默认给一个可收敛的上限；用户仍可在设置里
+ * 改为 0（不限）或其它值。超出后优雅停止并保留进度与发现。
+ */
+const DEFAULT_MAX_TOKENS_PER_RUN = 3_000_000
 
 /**
  * Tool names that can mutate the audited repository or run arbitrary code.
@@ -633,6 +639,12 @@ export class AuditRunner {
     )
     this.store.updateRun(run.id, { session_id: sessionId, trajectory_path: trajectoryPath })
     this.store.updateTask(taskId, { status: 'running', last_run_at: nowIso() })
+
+    // 让本次审计产生的会话出现在侧栏对应的工作区里，而不是“未分组”。
+    // DSH 的会话按 cwd 归入工作区：只有存在一个 path 等于会话 cwd 的工作区，
+    // 会话才会被收纳。这里在启动前确保该代码目录已注册为工作区（幂等，
+    // 已存在则复用）。失败不影响审计本身。
+    await this.ensureWorkspace(task.repo_path)
 
     // Sharded mode persists every slice up front so coverage survives restarts.
     let shardRecords = []
@@ -1583,7 +1595,9 @@ export class AuditRunner {
   checkTokenBudget(runId) {
     const entry = this.active.get(runId)
     if (!entry) return
-    const maxTokens = MaxTokensPerRun(this.store.getSetting('maxTokensPerRun', this.config.maxTokensPerRun ?? 0))
+    const maxTokens = MaxTokensPerRun(
+      this.store.getSetting('maxTokensPerRun', this.config.maxTokensPerRun ?? DEFAULT_MAX_TOKENS_PER_RUN),
+    )
     if (maxTokens <= 0) return
     const used = (entry.progress.tokensIn ?? 0) + (entry.progress.tokensOut ?? 0)
     if (used >= maxTokens) {
@@ -2077,6 +2091,34 @@ export class AuditRunner {
    * so disposing it removes the conversation from the menu panel. Rename it to
    * "<task name> · <time>" before retaining it.
    */
+  /**
+   * 确保代码目录已注册为一个 DSH 工作区（幂等）。DSH 的侧栏按会话 cwd 归组：
+   * 只有存在一个 path 等于会话 cwd 的工作区，会话才会被收纳进去，否则落到
+   * “未分组”。审计会话的 cwd 恒为 task.repo_path，因此在启动前把该目录注册
+   * 成工作区，审计产生的所有会话就会自动归到对应工作区。best-effort：任何
+   * 失败（旧版 DSH 无该控制器、目录不存在等）都静默忽略，不影响审计。
+   */
+  async ensureWorkspace(repoPath) {
+    if (!repoPath) return
+    try {
+      const controller = this.ctx.get?.('workspaceController')
+        ?? this.ctx.workspaceController
+        ?? this.ctx.remote?.workspace
+      if (!controller?.create) return
+      const result = await controller.create({ path: repoPath })
+      // 新创建的工作区用目录名作为标题，便于在侧栏辨认。
+      const workspace = result?.workspace
+      if (result?.created && workspace && !workspace.title?.()) {
+        const base = repoPath.split(/[\\/]/).filter(Boolean).pop() || repoPath
+        const rename = controller.rename?.({ workspaceId: workspace.id ?? workspace.id?.(), title: base })
+        if (rename?.catch) rename.catch(() => {})
+        else if (rename && typeof rename.then === 'function') rename.then(() => {}, () => {})
+      }
+    } catch {
+      // 工作区归组是锦上添花，绝不让它阻断审计。
+    }
+  }
+
   retainSession(entry, task, run) {
     const session = entry.handle?.agent?.session ?? entry.handle?.session
     if (session) {
@@ -2296,34 +2338,21 @@ export function buildShardAuditPrompt(task, shard, workspace, prompts, signals =
   const signalSection = signals?.length ? formatSignalsSection(signals) : ''
   const scaSection = formatScaSection(scaScan)
 
+  // 提示：为了让多个切片会话之间能命中 DSH 的 prompt 前缀缓存，把“所有切片
+  // 完全相同”的部分（角色、通用规矩、上报方式、漏洞清单）放在最前面，把
+  // “每个切片各不相同”的部分（切片信息、文件清单、兄弟切片、入口文件、
+  // 静态信号）放在最后。这样共享前缀在多个切片之间逐字节一致，可被上游缓存，
+  // 显著降低整次分片审计的 token 消耗。
   return `你是一名资深代码安全审计工程师，正在执行一个自动化的代码审计任务。本次任务把仓库切成了多个切片，每个切片由一个独立会话审计，你负责其中的一个切片。
 
 # 任务信息
 - 任务名称：${task.name}
 - 审计目录：${task.repo_path}
 - 任务说明：${task.description || '（无）'}
-${scaSection ? `\n${scaSection}\n` : ''}
 
-# 切片信息
-- 本切片：第 ${(shard.index ?? 0) + 1} 片 / 共 ${workspace?.shardCount ?? '?'} 片
-- 切片名称：${shard.name}
-- 切片路径：${shard.path}
-- 本切片文件数：${shard.file_count ?? files.length}
-- 全仓库可审计文件数：${workspace?.totalFiles ?? '?'}
-
-# 其他切片（不要重复审计）
-${siblings}
-
-# 本切片入口文件（建议优先从这里开始）
-${entries}
-
-# 本切片文件清单（必须逐个审计）
-以下是本切片需要审计的全部文件，使用相对审计目录的路径。请逐个打开阅读，不要只抽样。
-${fileList}
-${signalSection ? `\n${signalSection}\n` : ''}
 # 审计范围约束
 - 只审计下面列出的漏洞类型。未列出的漏洞类型一律不审计、不报告。
-- 你的审计对象是本切片文件清单中的文件。为了追踪调用链，可以只读查看切片外的文件，但漏洞必须落在本切片清单内的文件上；发现的问题属于其他切片时不要上报，交给对应切片或最后的跨切片汇聚处理。
+- 你的审计对象是本切片文件清单中的文件（清单在最后）。为了追踪调用链，可以只读查看切片外的文件，但漏洞必须落在本切片清单内的文件上；发现的问题属于其他切片时不要上报，交给对应切片或最后的跨切片汇聚处理。
 - 必须使用只读方式查看代码：禁止修改、创建、删除仓库中的任何文件；禁止运行 npm install / pip install 等安装命令；禁止构建、测试、运行仓库代码；禁止 git commit / git checkout 等写操作；禁止执行任何会产生副作用的命令。你唯一的"写入"通道是调用 code_audit_* 工具上报结果。
 - 所有文件路径使用相对审计目录的路径，禁止使用绝对路径。
 - 只报告有明确代码证据的问题；不确定、无法定位到具体代码的猜测不要上报。
@@ -2359,6 +2388,23 @@ ${sections.join('\n\n')}
 - recommendation：具体修复建议
 - poc_request：可利用漏洞必须提供 PoC 请求包示例。包含（1）原始 HTTP 请求：请求行、Host、必要的 Cookie/Token/Content-Type 等 Header、Body；（2）一条把同一请求写成可直接执行的 curl 命令。仅当漏洞无法通过 HTTP 触发（如本地条件、需依赖内部状态）时留空，并在 evidence 中说明复现步骤。
 - prompt_name：命中的审计提示词名称（例如 "${prompts[0]?.name ?? ''}"）
+${scaSection ? `\n${scaSection}\n` : ''}
+# 切片信息
+- 本切片：第 ${(shard.index ?? 0) + 1} 片 / 共 ${workspace?.shardCount ?? '?'} 片
+- 切片名称：${shard.name}
+- 切片路径：${shard.path}
+- 本切片文件数：${shard.file_count ?? files.length}
+- 全仓库可审计文件数：${workspace?.totalFiles ?? '?'}
+
+# 其他切片（不要重复审计）
+${siblings}
+
+# 本切片入口文件（建议优先从这里开始）
+${entries}
+${signalSection ? `\n${signalSection}\n` : ''}
+# 本切片文件清单（必须逐个审计）
+以下是本切片需要审计的全部文件，使用相对审计目录的路径。请逐个打开阅读，不要只抽样。
+${fileList}
 
 # 结束要求
 - 确认清单中的文件都已审计并上报过已读文件清单后，调用工具 \`code_audit_submit_summary\` 输出本切片的总结：已审计文件数与覆盖比例、发现数量与概要、需要跨切片关注的问题（例如调用链延伸到其他切片但无法在本切片确认的疑点）。

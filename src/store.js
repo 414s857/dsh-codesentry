@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { BUILTIN_PROMPTS } from './prompts.js'
+import { BUILTIN_SKILLS } from './builtinskills.js'
 import { newId, nowIso, parseJson } from './util.js'
 
 /** SQLite-backed store for tasks, runs, findings, prompts and settings. */
@@ -15,6 +16,7 @@ export class AuditStore {
     this.db.exec('PRAGMA foreign_keys = ON')
     this.migrate()
     this.seedBuiltinPrompts()
+    this.seedBuiltinSkills()
   }
 
   migrate() {
@@ -195,6 +197,21 @@ export class AuditStore {
         stamp,
         stamp,
       )
+    }
+  }
+
+  /** Insert built-in demonstration skills, keeping any user edits to same-named skills. */
+  seedBuiltinSkills() {
+    const existing = new Set(this.db.prepare('SELECT name FROM skills').all().map(row => row.name))
+    for (const skill of BUILTIN_SKILLS) {
+      if (existing.has(skill.name)) continue
+      this.createSkill({
+        ...skill,
+        skill_md: '',
+        manifest: { name: skill.name, description: skill.description, category: skill.category },
+        builtin: true,
+        enabled: true,
+      })
     }
   }
 

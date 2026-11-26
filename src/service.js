@@ -161,6 +161,7 @@ export function buildState(store, { dataDir, maxConcurrentRuns } = {}) {
     runs: runs.map(run => ({ ...withShards(run), task_name: taskMap.get(run.task_id)?.name ?? '' })),
     settings: store.allSettings({
       maxConcurrentRuns,
+      maxTokensPerRun: 3_000_000,
       defaultProvider: '',
       defaultModel: '',
     }),

@@ -13,7 +13,8 @@ export const BUILTIN_PROMPTS = [
 5. 二次注入：写入数据库后又拼接回 SQL 的数据。
 判定标准：不可信输入未经过参数化绑定或严格白名单就进入 SQL 语法位置，才判定为漏洞。
 误报排除：仅使用预编译参数、或拼接值来自常量/可信枚举。
-严重级别：可直接读取或写入任意数据为 critical；仅影响查询条件为 high；受限场景为 medium。`,
+严重级别：可直接读取或写入任意数据为 critical；仅影响查询条件为 high；受限场景为 medium。
+对应 CWE：CWE-89（SQL 注入）、二次注入 CWE-89 / CWE-915。`,
   },
   {
     name: '跨站脚本 XSS',
@@ -28,7 +29,8 @@ export const BUILTIN_PROMPTS = [
 5. CSP 与 HttpOnly 只能降低影响，不能替代输出编码。
 判定标准：不可信数据进入可执行上下文且没有上下文相关的编码/净化。
 误报排除：使用了成熟净化库（如 DOMPurify）且配置正确，或输出经过严格白名单。
-严重级别：存储型且影响已登录用户为 high/critical；反射型为 medium/high；纯 DOM 型为 medium。`,
+严重级别：存储型且影响已登录用户为 high/critical；反射型为 medium/high；纯 DOM 型为 medium。
+对应 CWE：CWE-79（XSS）；DOM 型 CWE-79。`,
   },
   {
     name: '命令注入与代码执行',
@@ -43,7 +45,8 @@ export const BUILTIN_PROMPTS = [
 5. 检查是否存在参数白名单、命令固定、输入转义或最小权限隔离。
 判定标准：不可信输入能改变命令结构或执行任意代码。
 误报排除：exec 接收固定命令且参数以数组传递并经过校验。
-严重级别：可执行任意命令或代码为 critical。`,
+严重级别：可执行任意命令或代码为 critical。
+对应 CWE：CWE-78（OS 命令注入）、CWE-77、CWE-94（代码注入）、CWE-95（eval 注入）。`,
   },
   {
     name: '路径穿越与任意文件读写',
@@ -58,7 +61,8 @@ export const BUILTIN_PROMPTS = [
 5. 临时文件、日志文件、配置文件写入路径是否可被控制。
 判定标准：可以读取或写入预期目录之外的文件。
 误报排除：路径来自服务端常量，或规范化后严格限制在允许目录内。
-严重级别：任意文件读写为 high/critical；仅可列举目录为 medium。`,
+严重级别：任意文件读写为 high/critical；仅可列举目录为 medium。
+对应 CWE：CWE-22（路径穿越）、CWE-23、CWE-36；Zip Slip 为 CWE-22。`,
   },
   {
     name: '不安全的反序列化',
@@ -72,7 +76,8 @@ export const BUILTIN_PROMPTS = [
 4. 序列化数据是否可被外部请求、Cookie、缓存、MQ 消息控制。
 判定标准：不可信输入进入可触发任意类型构造或代码执行的反序列化入口。
 误报排除：使用安全格式（JSON 且关闭多态）、或配置了严格类型白名单。
-严重级别：可 RCE 为 critical。`,
+严重级别：可 RCE 为 critical。
+对应 CWE：CWE-502（不可信数据反序列化）。`,
   },
   {
     name: '认证与会话缺陷',
@@ -87,7 +92,8 @@ export const BUILTIN_PROMPTS = [
 5. 密码重置令牌是否一次性、是否有有效期、是否绑定用户。
 判定标准：可以不经过预期认证流程获得身份或更高权限。
 误报排除：存在统一鉴权中间件且对象归属被显式校验。
-严重级别：认证绕过或管理员越权为 critical；普通水平越权为 high；会话加固缺失为 medium。`,
+严重级别：认证绕过或管理员越权为 critical；普通水平越权为 high；会话加固缺失为 medium。
+对应 CWE：认证绕过 CWE-287/CWE-306、会话固定 CWE-384、JWT 算法混淆 CWE-347、越权/CWE-639/CWE-284。`,
   },
   {
     name: '服务端请求伪造 SSRF',
@@ -102,7 +108,8 @@ export const BUILTIN_PROMPTS = [
 5. 出网权限与响应内容回显程度。
 判定标准：不可信输入可控制请求目标地址。
 误报排除：目标域名白名单固定且禁用了重定向。
-严重级别：可访问云元数据或内网服务为 high/critical；仅可探测外网为 medium。`,
+严重级别：可访问云元数据或内网服务为 high/critical；仅可探测外网为 medium。
+对应 CWE：CWE-918（SSRF）。`,
   },
   {
     name: '硬编码凭据与敏感信息泄露',
@@ -117,7 +124,8 @@ export const BUILTIN_PROMPTS = [
 5. 加密密钥与数据存放在同一位置，或使用弱随机数生成密钥。
 判定标准：凭据或敏感信息以明文形式存在于可读取的代码/配置/日志中并可被利用。
 误报排除：明确的示例值、测试用假密钥、已吊销的空值。
-严重级别：生产可用凭据为 critical/high；调试信息泄露为 medium。`,
+严重级别：生产可用凭据为 critical/high；调试信息泄露为 medium。
+对应 CWE：硬编码凭据 CWE-798、敏感信息泄露 CWE-200/CWE-312（明文存储）。`,
   },
   {
     name: '加密与随机数缺陷',
@@ -132,7 +140,8 @@ export const BUILTIN_PROMPTS = [
 5. 证书校验被关闭（trustAll、verify=false、HostnameVerifier 返回 true）。
 判定标准：加密原语或参数选择使机密性/完整性目标无法达成。
 误报排除：仅用于非安全场景的校验和、或明确兼容旧数据的只读解密路径。
-严重级别：签名密钥或会话令牌可预测为 high；弱哈希用于密码存储为 high；一般算法降级为 medium。`,
+严重级别：签名密钥或会话令牌可预测为 high；弱哈希用于密码存储为 high；一般算法降级为 medium。
+对应 CWE：弱算法 CWE-327、弱随机数 CWE-338/CWE-330、证书校验缺失 CWE-295、缺少完整性 CWE-353。`,
   },
   {
     name: '文件上传与 XXE',
@@ -147,7 +156,8 @@ export const BUILTIN_PROMPTS = [
 5. 上传后的文件访问是否带 Content-Disposition 与正确 Content-Type。
 判定标准：可上传可执行/可解析文件并产生影响，或 XML 可读取本地文件/发起内网请求。
 误报排除：上传文件存对象存储且强制下载，或 XML 解析器已禁用外部实体。
-严重级别：上传 WebShell 或 XXE 读取敏感文件为 critical/high；受限上传为 medium。`,
+严重级别：上传 WebShell 或 XXE 读取敏感文件为 critical/high；受限上传为 medium。
+对应 CWE：不受限上传 CWE-434、XXE CWE-611。`,
   },
   {
     name: '竞态与业务逻辑',
@@ -162,7 +172,8 @@ export const BUILTIN_PROMPTS = [
 5. 审批、支付回调、签名校验是否可伪造或重放。
 判定标准：并发或重放能够获得超出业务规则的利益或破坏数据一致性。
 误报排除：存在数据库唯一约束/原子更新/幂等键等可靠防护。
-严重级别：直接资金损失为 critical/high；状态不一致为 medium。`,
+严重级别：直接资金损失为 critical/high；状态不一致为 medium。
+对应 CWE：竞态 CWE-362/CWE-367（TOCTOU）、业务逻辑/参数篡改 CWE-840、缺少幂等 CWE-837。`,
   },
   {
     name: '依赖与供应链风险',
@@ -177,7 +188,8 @@ export const BUILTIN_PROMPTS = [
 5. 是否引入来源不明或长期未维护的组件。
 判定标准：依赖的已知漏洞或配置可在本项目可达路径中被触发。
 误报排除：漏洞代码路径不可达，或已有缓解措施。
-严重级别：可达 RCE 为 critical/high；信息泄露为 medium；仅版本过旧为 low。`,
+严重级别：可达 RCE 为 critical/high；信息泄露为 medium；仅版本过旧为 low。
+对应 CWE：CWE-1104（使用未维护/有漏洞组件）、CWE-1395（依赖脆弱组件）、CWE-829（引入不可信功能）。`,
   },
   {
     name: '模板注入与表达式注入',
@@ -192,7 +204,8 @@ export const BUILTIN_PROMPTS = [
 5. 前端模板编译（客户端模板）是否把用户输入当作模板源码。
 判定标准：不可信输入能改变模板/表达式结构并被服务端执行。
 误报排除：仅作为模板数据变量传入且引擎默认转义，或使用固定模板。
-严重级别：可执行任意表达式或命令为 critical；仅可读取上下文变量为 medium/high。`,
+严重级别：可执行任意表达式或命令为 critical；仅可读取上下文变量为 medium/high。
+对应 CWE：SSTI CWE-1336、表达式语言注入 CWE-917、代码注入 CWE-94。`,
   },
   {
     name: '日志、异常与信息泄露',
@@ -207,6 +220,135 @@ export const BUILTIN_PROMPTS = [
 5. 响应头泄露服务器版本、缺少安全响应头。
 判定标准：泄露的信息可辅助攻击者进一步利用系统。
 误报排除：仅返回通用错误码，且日志已脱敏。
-严重级别：可获取凭据或内网拓扑为 medium/high；一般信息泄露为 low。`,
+严重级别：可获取凭据或内网拓扑为 medium/high；一般信息泄露为 low。
+对应 CWE：CWE-209（异常信息泄露）、CWE-532（日志泄露敏感信息）、CWE-200（信息暴露）、CWE-548（目录列表）。`,
+  },
+  {
+    name: '访问控制与越权（IDOR / 批量赋值）',
+    category: '访问控制',
+    default_severity: 'critical',
+    content: `审计目标：找出授权边界缺失导致的可访问他人数据或越权操作。
+检查清单：
+1. 逐个写操作与读接口核对：是否只校验"已登录"，而没有校验"请求对象属于当前用户/租户/组织"（IDOR、水平越权）。
+2. 路径/参数中的 id、uid、orderId、tenantId 等是否直接用于查询，未与当前会话身份做归属比对。
+3. 管理/内部接口是否可达、是否二次鉴权（垂直越权）；是否存在仅靠前端隐藏按钮伪装的后端无鉴权。
+4. 批量赋值（Mass Assignment）：请求体/表单字段是否直接绑定到实体，role、is_admin、balance、price、status、ownerId 可被客户端提交篡改。
+5. 权限模型是否统一集中在鉴权中间件；找出绕过中间件的路由（路径匹配绕过、静态资源、actuator、内部 RPC）。
+判定标准：未经授权的身份可以访问本无权访问的资源或执行本无权执行的操作。
+误报排除：存在统一鉴权中间件且每个敏感接口都显式校验了对象归属。
+严重级别：越权读写他人数据或管理员操作可达为 critical/high；受限信息越权为 medium。
+对应 CWE：CWE-639（IDOR）、CWE-284（访问控制不当）、CWE-285、CWE-862（缺少授权）、CWE-915（批量赋值）。`,
+  },
+  {
+    name: '跨站请求伪造 CSRF',
+    category: '访问控制',
+    default_severity: 'high',
+    content: `审计目标：找出可被第三方站点诱导发起、携带用户身份的有状态写请求。
+检查清单：
+1. 所有会改变状态的接口（改密、改邮箱、转账、下单、加白名单、绑卡、授权 OAuth）是否缺少 CSRF 防护。
+2. 防护方式是否有效：Anti-CSRF Token 是否随请求校验、是否绑定会话、是否可预测/复用；SameSite Cookie 设置；Origin/Referer 校验。
+3. GET 请求是否被用于执行写操作（本应 POST）。
+4. JSON / multipart 接口是否以为"必须是 application/json"就免防护（表单跨域仍可发简单请求，或被 CORS 放宽）。
+5. 关键操作是否二次验证（密码、验证码、MFA）。
+判定标准：攻击者无需受害者交互即可让受害者浏览器携带其凭据完成敏感操作。
+误报排除：使用严格 SameSite=Lax/Strict + Token 校验 + Origin 校验之一且覆盖所有写接口。
+严重级别：改密/转账/授权类为 high/critical；低影响状态变更为 medium。
+对应 CWE：CWE-352（CSRF）。`,
+  },
+  {
+    name: '开放重定向与 URL 信任',
+    category: '网络',
+    default_severity: 'medium',
+    content: `审计目标：找出用不可信参数决定跳转目标或加载远程资源的位置。
+检查清单：
+1. 登录成功、登出、支付回跳、短链、OAuth redirect_uri 等处的 next/url/return/target 参数直接跳转。
+2. 跳转目标是否做了白名单校验（域名、协议、主机精确匹配），还是仅用 startsWith/contains 判断（可被 //evil、@、.evil.com 绕过）。
+3. 是否允许 javascript:/data:/file: 等危险协议。
+4. 服务端根据参数加载远程模板、远程配置、远程脚本、回调地址（不仅跳转，还包括"信任外部 URL 内容"）。
+5. OAuth 授权码模式下 redirect_uri 是否严格匹配注册值。
+判定标准：不可信输入可把用户导向攻击者站点或让服务端加载不可信内容。
+误报排除：目标来自固定常量或严格白名单。
+严重级别：OAuth redirect_uri 可控为 high；一般开放重定向为 medium（常作钓鱼/令牌窃取链）。
+对应 CWE：CWE-601（开放重定向）、CWE-939（OAuth redirect_uri 不当）。`,
+  },
+  {
+    name: 'HTTP 请求走私与响应拆分',
+    category: '网络',
+    default_severity: 'high',
+    content: `审计目标：找出前端代理与后端对 HTTP 报文边界解析不一致、或响应头注入的位置。
+检查清单：
+1. 是否存在反代/CDN（Nginx、HAProxy、Envoy）与后端对 Content-Length、Transfer-Encoding 处理不一致（CL.TE、TE.CL、TE.TE）。
+2. 前端是否直接透传客户端 Content-Length / Transfer-Encoding 双头；是否允许被篡改的畸形头。
+3. 响应头构造是否拼接用户输入（CRLF 注入 \r\n）导致响应拆分 / 头注入 / 缓存投毒。
+4. 是否对请求行、Host 头做严格校验（Host 头注入影响缓存与重置链接）。
+5. 请求体长度、分块编码、重复头字段的处理是否一致。
+判定标准：攻击者可构造歧义请求使后端解析出额外请求或被注入响应头。
+误报排除：单一同构代理、无用户可控头部拼接。
+严重级别：可达成请求走私/缓存投毒为 high/critical；仅响应头 CRLF 注入为 medium/high。
+对应 CWE：CWE-444（请求走私）、CWE-113（响应拆分/CRLF 注入）、CWE-644（Host 头不当）。`,
+  },
+  {
+    name: '原型链污染 Prototype Pollution',
+    category: '注入',
+    default_severity: 'high',
+    content: `审计目标：找出把不可信输入合并进对象、污染 Object.prototype 的位置（Node/JS 栈重点）。
+检查清单：
+1. 深层合并/赋值：lodash.merge / mergeWith / set / zipObjectDeep、Object.assign 深层实现、自定义 deepMerge。
+2. 查询字符串/body 解析：qs、querystring、express.json 对 __proto__、constructor.prototype 的处理。
+3. 是否存在递归按路径赋值（\`obj[path[0]][path[1]] = val\`），未拦截 __proto__/constructor/prototype 键。
+4. 污染后的"接地"（gadget）：模板引擎选项、child_process 的 shell 选项、配置合并、Object.entries 遍历中的属性注入。
+5. 使用 Map、Object.create(null) 或冻结原型可降低影响。
+判定标准：可控键值能写入 Object.prototype 并影响后续对象行为。
+误报排除：合并前做了 hasOwnProperty + key 黑名单，或使用无原型的对象存储。
+严重级别：可链式达成 RCE（如影响 child_process）为 critical/high；仅属性篡改影响逻辑为 medium。
+对应 CWE：CWE-1321（原型链污染）。`,
+  },
+  {
+    name: '客户端安全与前端存储',
+    category: '客户端',
+    default_severity: 'medium',
+    content: `审计目标：找出前端在浏览器侧暴露的信任边界问题。
+检查清单：
+1. 敏感令牌（access/refresh token、API Key）是否存放在 localStorage/sessionStorage 且可被 XSS 读取；是否应改用 HttpOnly Cookie。
+2. postMessage：是否校验 event.origin 与 event.source，是否把消息内容当作 HTML/代码执行（window.postMessage 通配 "*"）。
+3. 前端路由/菜单级权限控制是否被误当作安全边界（后端未校验）。
+4. CSP 是否缺失或存在 unsafe-inline/unsafe-eval、过宽 script-src；是否可被绕过。
+5. 前端硬编码的后端地址、密钥、内部接口；调试开关、source map 是否暴露。
+判定标准：浏览器侧可读取或伪造敏感数据/操作，或把不可信内容当作代码执行。
+误报排除：令牌存 HttpOnly Cookie、postMessage 严格校验 origin、CSP 有效且严格。
+严重级别：可窃取令牌或达成 XSS 链为 high；一般配置缺失为 low/medium。
+对应 CWE：CWE-922（敏感信息不安全存储）、CWE-346（Origin 校验缺失）、CWE-1021、CWE-693（CSP 保护不当）。`,
+  },
+  {
+    name: '内存安全与原生代码缺陷',
+    category: '内存安全',
+    default_severity: 'high',
+    content: `审计目标：找出 C/C++/Rust(unsafe)/Go(unsafe) 等原生代码中的内存与整数缺陷（仅当审计目标含原生代码时启用）。
+检查清单：
+1. 缓冲区操作：strcpy/strcat/sprintf/gets/memcpy/memmove 的长度来源是否可控、是否校验目标容量。
+2. 整数：长度/偏移计算中的溢出、回绕、符号有无转换（int <- size_t）导致分配与拷贝长度不一致。
+3. 释放后使用（UAF）、双重释放、悬垂指针、未初始化读取。
+4. 越界读/写：数组与切片下标来自外部输入、off-by-one、循环边界。
+5. 格式化字符串（printf 参数可控）、命令/路径拼接用的缓冲区。
+判定标准：外部可控输入可导致内存越界、破坏或任意读写。
+误报排除：使用安全封装（如 snprintf 且校验返回值）且长度有界。
+严重级别：可远程触发的栈/堆溢出或 UAF 为 critical/high；本地或受限为 medium。
+对应 CWE：CWE-120（缓冲区溢出）、CWE-122（堆溢出）、CWE-190（整数溢出）、CWE-416（UAF）、CWE-415（双重释放）、CWE-134（格式化字符串）。`,
+  },
+  {
+    name: 'NoSQL / LDAP / 其他注入',
+    category: '注入',
+    default_severity: 'high',
+    content: `审计目标：找出非 SQL 的查询/目录/表达式注入（NoSQL、LDAP、XPath、Log 注入等）。
+检查清单：
+1. NoSQL：MongoDB 查询把用户对象/字符串直接传入（\`{ $where: user }\`、\`$ne\`、\`$gt\` 操作符被注入，如 \`{"username": {"$ne": null}}\`）、JS 求值 \`$where\`/\$function。
+2. LDAP：查询过滤器拼接用户输入未转义（\`*(uid=*)\`），可绕过认证或枚举。
+3. XPath / XML 查询拼接。
+4. 日志注入：用户输入写入日志导致伪造日志行、CRLF 注入。
+5. 命令行/IPC 参数注入（非 shell 但由参数语义导致，如 git 参数注入）。
+判定标准：不可信输入改变了查询/过滤器语义并可绕过条件或读取额外数据。
+误报排除：所有值都经类型约束（如强制为字符串并转义）或用参数化查询对象。
+严重级别：认证绕过或任意数据读取为 high/critical；受限为 medium。
+对应 CWE：NoSQL 注入 CWE-943、LDAP 注入 CWE-90、XPath 注入 CWE-643、日志注入 CWE-117。`,
   },
 ]
