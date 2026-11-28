@@ -310,7 +310,7 @@ export async function registerAuditTools(ctx, { store, runner, dataDir, log = ()
 
   register(defineTool({
     name: 'code_audit_report_files',
-    description: '在切片审计中上报已经读完的文件清单。每读完一批文件调用一次，用于记录该切片的覆盖率台账；重复上报会自动去重。',
+    description: '上报已经读完的文件清单。每读完一批文件调用一次，用于记录本次审计的覆盖率台账；重复上报会自动去重。',
     parameters: {
       files: {
         type: 'array',

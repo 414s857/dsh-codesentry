@@ -1,7 +1,7 @@
 {
   "name": "dsh-codesentry",
   "version": "1.0.0",
-  "description": "dsh-codesentry —— 面向 DeepSeek Harness 的代码审计插件：分片多会话仓库审计、审计任务调度、漏洞提示词、SKILL.md 审计技能、发现与报告一键生成。",
+  "description": "dsh-codesentry —— 面向 DeepSeek Harness 的代码审计插件：单会话由 agent 自主分工的仓库审计、审计任务调度、漏洞提示词、SKILL.md 审计技能、发现与报告一键生成。",
   "type": "module",
   "main": "./src/index.js",
   "exports": {
