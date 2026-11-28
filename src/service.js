@@ -150,10 +150,28 @@ export function buildState(store, { dataDir, maxConcurrentRuns } = {}) {
       has_skill_report: skillReportTasks.has(task.id),
       latest_run: latestRunMap.has(task.id) ? withShards(latestRunMap.get(task.id)) : null,
     })),
-    prompts,
+    // Prompt bodies can be long and are only needed when editing. The list
+    // view only shows name/category/severity, so ship a trimmed projection and
+    // let the editor fetch the full content via GET /prompts/:id on demand.
+    prompts: prompts.map(promptListSummary),
     skills: skills.map(skillSummary),
+    // The findings table only renders title/severity/location/status/time. Ship
+    // those plus a short searchable excerpt; full body (snippet/evidence/poc/
+    // description/recommendation) is fetched via GET /findings/:id on open.
+    // Shipping every finding's full text on each /state poll was the main lag.
     findings: findings.map(finding => ({
-      ...finding,
+      id: finding.id,
+      task_id: finding.task_id,
+      severity: finding.severity,
+      title: finding.title,
+      category: finding.category,
+      file_path: finding.file_path,
+      line_start: finding.line_start,
+      line_end: finding.line_end,
+      status: finding.status,
+      updated_at: finding.updated_at,
+      created_at: finding.created_at,
+      search_text: String(finding.description ?? '').replace(/\s+/g, ' ').trim().slice(0, 200),
       task_name: taskMap.get(finding.task_id)?.name ?? '',
       prompt_name: finding.prompt_id ? promptMap.get(finding.prompt_id)?.name ?? '' : '',
       skill_name: finding.skill_id ? skillMap.get(finding.skill_id)?.name ?? '' : '',
@@ -172,6 +190,21 @@ export function buildState(store, { dataDir, maxConcurrentRuns } = {}) {
 /** Normalise a severity coming from a request. */
 export function toSeverity(value, fallback = 'medium') {
   return normaliseSeverity(value, fallback)
+}
+
+/** Lightweight prompt record for the dashboard list; full body via GET /prompts/:id. */
+function promptListSummary(prompt) {
+  return {
+    id: prompt.id,
+    name: prompt.name,
+    category: prompt.category,
+    default_severity: prompt.default_severity,
+    builtin: prompt.builtin,
+    enabled: prompt.enabled,
+    preview: String(prompt.content ?? '').replace(/\s+/g, ' ').trim().slice(0, 260),
+    created_at: prompt.created_at,
+    updated_at: prompt.updated_at,
+  }
 }
 
 /** Lightweight skill record for the dashboard; full text is fetched per skill. */

@@ -174,8 +174,12 @@ a:hover { text-decoration: underline; }
 .panel-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 /* ── Tables ────────────────────────────────────────── */
-.table-wrap { overflow-x: auto; overflow-y: visible; width: 100%; min-width: 0; overscroll-behavior-x: contain; scrollbar-gutter: stable; }
+/* Keep the horizontal scrollbar in reach: cap the table height and let the
+   body scroll vertically inside the wrapper, so the x-scrollbar stays pinned
+   below the visible rows instead of being pushed off-screen by row count. */
+.table-wrap { overflow-x: auto; overflow-y: auto; width: 100%; min-width: 0; max-height: max(240px, calc(100vh - 340px)); overscroll-behavior-x: contain; scrollbar-gutter: stable; }
 .table-wrap::-webkit-scrollbar { height: 12px; }
+thead th { position: sticky; top: 0; z-index: 1; }
 table { width: 100%; border-collapse: collapse; min-width: 880px; }
 th, td { text-align: left; padding: 12px 14px; vertical-align: middle; }
 th { color: var(--muted); font-weight: 600; font-size: 11px; letter-spacing: .5px; text-transform: uppercase; background: var(--th-bg); border-bottom: 1px solid var(--line-strong); white-space: nowrap; }

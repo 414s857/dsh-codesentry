@@ -582,7 +582,7 @@ function renderFindings() {
   if (filters.q) {
     const query = filters.q.toLowerCase()
     findings = findings.filter(finding =>
-      `${finding.title} ${finding.file_path} ${finding.category} ${finding.description}`.toLowerCase().includes(query),
+      `${finding.title} ${finding.file_path} ${finding.category} ${finding.search_text ?? ''}`.toLowerCase().includes(query),
     )
   }
 
@@ -630,7 +630,7 @@ function renderPrompts() {
       <span>分类：${esc(prompt.category || '未分类')}</span>
       <span>默认：${esc(LABELS.severity[prompt.default_severity] ?? prompt.default_severity)}</span>
     </div>
-    <div class="preview">${esc(String(prompt.content ?? '').slice(0, 260))}</div>
+    <div class="preview">${esc(String(prompt.preview ?? prompt.content ?? '').slice(0, 260))}</div>
     <footer>
       <button class="btn small" data-action="edit-prompt" data-id="${prompt.id}">编辑</button>
       <button class="btn small" data-action="toggle-prompt" data-id="${prompt.id}" data-enabled="${prompt.enabled ? '1' : '0'}">${prompt.enabled ? '禁用' : '启用'}</button>
@@ -1035,7 +1035,18 @@ function openReportModal(task) {
 
 // ------------------------------------------------------------ finding modal
 
-function openFindingModal(finding) {
+async function openFindingModal(finding) {
+  // The state list only carries a trimmed finding; fetch the full body (code
+  // snippet, evidence, PoC, recommendation) on demand when the detail opens.
+  if (finding && !finding._full) {
+    try {
+      const payload = await api(`/findings/${finding.id}`)
+      if (payload?.finding) finding = { ...payload.finding, _full: true }
+    } catch (error) {
+      toast(error.message, true)
+      return
+    }
+  }
   const location = `${finding.file_path || '—'}${finding.line_start ? `:${finding.line_start}${finding.line_end && finding.line_end !== finding.line_start ? `-${finding.line_end}` : ''}` : ''}`
   const body = `
     <div class="detail-grid">
@@ -1084,7 +1095,18 @@ function openFindingModal(finding) {
 
 // ------------------------------------------------------------- prompt modal
 
-function openPromptModal(prompt) {
+async function openPromptModal(prompt) {
+  // The state list trims prompt bodies to a preview; fetch full content when
+  // editing so the textarea is never opened with a truncated body.
+  if (prompt && prompt.content === undefined) {
+    try {
+      const payload = await api(`/prompts/${prompt.id}`)
+      if (payload?.prompt) prompt = payload.prompt
+    } catch (error) {
+      toast(error.message, true)
+      return
+    }
+  }
   const body = `
     <form id="prompt-form" class="form-grid">
       <div class="field"><label>名称 *</label><input name="name" required maxlength="120" value="${esc(prompt?.name ?? '')}" placeholder="例如：SQL 注入"></div>

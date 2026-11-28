@@ -283,6 +283,12 @@ async function handlePrompts(req, res, segments, context) {
     sendJson(res, 200, { prompts: store.listPrompts() })
     return
   }
+  if (method === 'GET' && segments.length === 2 && id !== 'export') {
+    const prompt = store.getPrompt(id)
+    if (!prompt) throw httpError(404, '提示词不存在')
+    sendJson(res, 200, { prompt })
+    return
+  }
   if (method === 'GET' && id === 'export') {
     const prompts = store.listPrompts()
     const stamp = new Date().toISOString().slice(0, 10)
@@ -548,6 +554,12 @@ async function handleFindings(req, res, segments, context) {
 
   if (method === 'GET' && segments.length === 1) {
     sendJson(res, 200, { findings: store.listFindings() })
+    return
+  }
+  if (method === 'GET' && segments.length === 2) {
+    const finding = store.getFinding(id)
+    if (!finding) throw httpError(404, '漏洞记录不存在')
+    sendJson(res, 200, { finding })
     return
   }
   if (method === 'PATCH' && segments.length === 2) {

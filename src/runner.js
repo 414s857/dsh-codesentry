@@ -241,6 +241,9 @@ export class AuditRunner {
     /** Finished sessions kept alive so their conversation remains in the client sidebar. */
     this.retained = []
     this.maxRetained = Number(config.maxRetainedSessions) || 50
+    /** Global read-only guard (covers subagents); installed lazily at run start. */
+    this.readOnlyGuardInstalled = false
+    this.readOnlyGuardDisposer = undefined
     /** sessionId -> runId */
     this.sessionRuns = new Map()
     // Paused runs only live in memory. Records left over from a previous
@@ -322,6 +325,98 @@ export class AuditRunner {
         /* guard is a backstop; restrict already did the enforcing */
       }
     }
+  }
+
+  /**
+   * Install ONE global (unscoped) read-only guard on the plugin's own tools
+   * service. Unlike {@link applyReadOnlyEnforcement} — which masks write tools
+   * only on a single agent's scoped registry — a guard registered on the
+   * unscoped plugin context applies to EVERY agent, including subagents an
+   * audit agent spawns in-session.
+   *
+   * This matters because subagents are independent root scopes: their scoped
+   * registry does NOT inherit the parent agent's `tools.restrict({deny})`
+   * (see dsh-agent-loop `createScope(loopCtx, this)` with no `options.parent`).
+   * Without this guard a spawned subagent could call write/edit/bash and escape
+   * the read-only contract.
+   *
+   * The guard is selective: it only denies tools for agents that belong to a
+   * live audit run (resolved by walking `parentSession` back to a run session),
+   * so normal user sessions are unaffected. Idempotent.
+   */
+  installReadOnlyGuard() {
+    if (this.readOnlyGuardInstalled) return
+    if (this.store.getSetting('enforceReadOnlyTools', this.config.enforceReadOnlyTools ?? true) === false) return
+    let tools
+    try {
+      tools = this.ctx?.get?.('tools') ?? this.ctx?.tools
+    } catch {
+      tools = undefined
+    }
+    if (!tools || typeof tools.guard !== 'function') {
+      // Stringent fallback: per-agent restrict still runs, but we cannot prove
+      // subagents are contained. Warn once so the operator knows.
+      if (this.ctx?.logger?.warn) this.ctx.logger.warn('[dsh-codesentry] 无法安装全局只读守卫（tools 服务不可用），子智能体的只读约束无法在工具层保证')
+      return
+    }
+    try {
+      const dispose = tools.guard(exec => {
+        if (!exec || typeof exec.name !== 'string') return undefined
+        const isWriteTool = READ_ONLY_DENIED_TOOLS.includes(exec.name) || READ_ONLY_DENY_PATTERN.test(exec.name)
+        if (!isWriteTool) return undefined
+        // Only constrain agents that trace back to a live audit-run session.
+        if (!this.agentBelongsToAudit(exec.agent)) return undefined
+        return READ_ONLY_DENY_REASON
+      })
+      if (typeof dispose === 'function') this.readOnlyGuardDisposer = dispose
+      this.readOnlyGuardInstalled = true
+    } catch (error) {
+      if (this.ctx?.logger?.warn) this.ctx.logger.warn(`[dsh-codesentry] 安装全局只读守卫失败：${error?.message ?? error}`)
+    }
+  }
+
+  /**
+   * Whether `agent` belongs to a live audit run. Walks the durable
+   * `parentSession` lineage so a spawned subagent resolves up to the audit
+   * root session. Returns false for `undefined` agents (global/system calls).
+   */
+  agentBelongsToAudit(agent) {
+    let session = agent?.session
+    let guardDepth = 0
+    while (session && guardDepth < 32) {
+      const id = session.id
+      if (id && this.sessionRuns.has(id)) {
+        const runId = this.sessionRuns.get(id)
+        const run = this.store.getRun(runId)
+        if (run && run.status === 'running') return true
+      }
+      let parentId
+      try {
+        parentId = session.header?.parentSession
+      } catch {
+        parentId = undefined
+      }
+      if (!parentId) return false
+      // Resolve the parent session object via the sessions service when present.
+      let parentSession
+      try {
+        const sessions = this.ctx?.get?.('sessions') ?? this.ctx?.sessions
+        parentSession = sessions?.get?.(parentId)
+      } catch {
+        parentSession = undefined
+      }
+      if (!parentSession) {
+        // Cannot resolve further; fall back to whether the parent id is an audit root.
+        if (this.sessionRuns.has(parentId)) {
+          const run = this.store.getRun(this.sessionRuns.get(parentId))
+          return !!run && run.status === 'running'
+        }
+        return false
+      }
+      session = parentSession
+      guardDepth += 1
+    }
+    return false
   }
 
   /** Live agent sessions visible to the developer; one at a time per run. */
@@ -609,16 +704,17 @@ export class AuditRunner {
     } else if (selectedPrompts.length === 0) {
       throw new Error('请先为任务选择至少一条启用的漏洞审计提示词')
     }
-    // Prompt-mode audits shard the repository first: every slice gets its own
-    // agent session plus a persisted read-file ledger, then a final session
-    // aggregates cross-slice taint flows. Small repos fall back to the
-    // single-session path.
-    // Plan shards off the event loop: walking a large repository synchronously
-    // here used to freeze the DSH host's web server and every concurrent
-    // session for the duration of the scan.
+    // 单会话审计：整个仓库交给一个主审计会话，只给它「项目根目录 + 提示词」，
+    // 由它在会话内自行用 subagent/workflow 拆分、并行、汇总。这样片间共享上下文、
+    // 不再为每个切片重复注入全套提示词，token 与耗时都更省。
+    //
+    // 仍然调用 planShardsSafeAsync，但只用于拿整仓文件清单给静态信号扫描
+    // （见后面 single 分支取 plan.shards[0].files），不再据此派发切片会话。
+    // 该扫描离开事件循环，避免阻塞 DSH 主机的 web 服务。
     const plan = auditMode === 'prompts' ? await planShardsSafeAsync(task.repo_path) : null
-    const sharded = !!plan && plan.mode === 'sharded'
-    const auditUnits = sharded ? plan.shards.length : auditMode === 'skill' ? 1 : selectedPrompts.length
+    // FORCE_SINGLE_SESSION: prompts 模式不再切片，一律走单会话路径。
+    const sharded = false
+    const auditUnits = auditMode === 'skill' ? 1 : selectedPrompts.length
     const unitNames = auditMode === 'skill' ? [skill.name] : selectedPrompts.map(prompt => prompt.name)
 
     const selection = this.resolveSelection(task)
@@ -645,6 +741,10 @@ export class AuditRunner {
     // 会话才会被收纳。这里在启动前确保该代码目录已注册为工作区（幂等，
     // 已存在则复用）。失败不影响审计本身。
     const workspaceId = await this.ensureWorkspace(task.repo_path)
+
+    // Ensure the global read-only guard is in place before any session starts,
+    // so subagents spawned in-session are contained too.
+    this.installReadOnlyGuard()
 
     // Sharded mode persists every slice up front so coverage survives restarts.
     let shardRecords = []
@@ -755,7 +855,14 @@ export class AuditRunner {
         let repoSignals = null
         if (auditMode !== 'skill') {
           try {
-            const fileList = plan?.shards?.[0]?.files ?? (await planShardsSafeAsync(task.repo_path))?.shards?.[0]?.files ?? []
+            // Single-session audit covers the whole repository, so the static
+            // signal scan must see every file. planShards may still return a
+            // 'sharded' plan for large repos; flatten every shard's file list
+            // (dedup) so no module is dropped from the scan.
+            const planned = plan ?? (await planShardsSafeAsync(task.repo_path))
+            const fileList = planned
+              ? [...new Set((planned.shards ?? []).flatMap(shard => shard.files ?? []))]
+              : []
             repoSignals = (await scanRepositorySignalsAsync(task.repo_path, fileList)).signals
           } catch {
             repoSignals = null
@@ -1739,7 +1846,34 @@ export class AuditRunner {
   contextForAgent(agent) {
     const sessionId = agent?.session?.id
     if (!sessionId) return undefined
-    const runId = this.sessionRuns.get(sessionId)
+    // Direct hit first (the audit root session / shard session).
+    let runId = this.sessionRuns.get(sessionId)
+    let session = agent?.session
+    // Subagents run in independent sessions: walk the durable parentSession
+    // lineage to find the audit-run root so a subagent's submit_* tools land on
+    // the correct run.
+    let depth = 0
+    while (!runId && session && depth < 32) {
+      let parentId
+      try {
+        parentId = session.header?.parentSession
+      } catch {
+        parentId = undefined
+      }
+      if (!parentId) break
+      runId = this.sessionRuns.get(parentId)
+      if (runId) break
+      let parentSession
+      try {
+        const sessions = this.ctx?.get?.('sessions') ?? this.ctx?.sessions
+        parentSession = sessions?.get?.(parentId)
+      } catch {
+        parentSession = undefined
+      }
+      if (!parentSession) break
+      session = parentSession
+      depth += 1
+    }
     if (!runId) return undefined
     const run = this.store.getRun(runId)
     if (!run || run.status !== 'running') return undefined
@@ -1747,6 +1881,8 @@ export class AuditRunner {
     return {
       runId,
       taskId: run.task_id,
+      agentSessionId: sessionId,
+      isSubagent: !this.sessionRuns.has(sessionId),
       shardId: entry?.kind === 'shard' ? entry.shardId : undefined,
       shardName: entry?.kind === 'shard' ? entry.progress?.prompt || '' : undefined,
     }
@@ -1902,13 +2038,22 @@ export class AuditRunner {
   submitSummary(context, summary) {
     const entry = this.active.get(context.runId)
     if (entry) {
-      entry.summary = String(summary ?? '')
-      entry.progress.stage = '汇总'
-      entry.progress.percent = Math.max(entry.progress.percent ?? 0, 95)
-      entry.progress.note = '已提交审计总结，等待会话结束'
-      this.persistProgress(context.runId)
+      // A subagent (non-root session) must not hijack the run's canonical
+      // summary or push progress to the finish gate; only the audit root /
+      // shard / aggregate / review session may. Subagents still get their text
+      // recorded on the run when it has no summary yet, but never overwrite it.
+      const isRoot = !context.agentSessionId || context.agentSessionId === entry.sessionId
+      if (isRoot) {
+        entry.summary = String(summary ?? '')
+        entry.progress.stage = '汇总'
+        entry.progress.percent = Math.max(entry.progress.percent ?? 0, 95)
+        entry.progress.note = '已提交审计总结，等待会话结束'
+        this.persistProgress(context.runId)
+      } else if (!entry.summary) {
+        entry.summary = String(summary ?? '')
+      }
     }
-    this.store.updateRun(context.runId, { summary: clip(summary, 4000) })
+    this.store.updateRun(context.runId, { summary: clip(entry?.summary ?? summary, 4000) })
   }
 
   /**
@@ -2234,6 +2379,15 @@ export class AuditRunner {
     }
     this.retained = []
     this.sessionRuns.clear()
+    if (typeof this.readOnlyGuardDisposer === 'function') {
+      try {
+        this.readOnlyGuardDisposer()
+      } catch {
+        // ignore
+      }
+      this.readOnlyGuardDisposer = undefined
+      this.readOnlyGuardInstalled = false
+    }
   }
 }
 
@@ -2305,6 +2459,12 @@ ${signalSection ? `\n${signalSection}\n` : ''}
 - 必须使用只读方式查看代码：禁止修改、创建、删除仓库中的任何文件；禁止运行 npm install / pip install 等安装命令；禁止构建、测试、运行仓库代码；禁止 git commit / git checkout 等写操作；禁止执行任何会产生副作用的命令。你唯一的"写入"通道是调用 code_audit_* 工具上报结果。
 - 所有文件路径使用相对审计目录的路径，禁止使用绝对路径。
 - 只报告有明确代码证据的问题；不确定、无法定位到具体代码的猜测不要上报。
+
+# 任务拆分（可选，自行决定）
+本仓库整体交给你一个会话审计。你可以（但不强制）使用 \`subagent\` 或 \`workflow\` 工具把审计工作拆成若干子任务并行推进，例如按目录/模块拆分，或按漏洞类型拆分；整仓文件列表见下方静态线索。拆分与汇总完全由你决定，不需要预先切片。
+- 若派发子智能体：每个子智能体同样必须遵守上面的只读约束（它们同样处于只读审计会话，写操作会被拒绝）。在子任务描述里把这条约束、审计目录、以及要审计的漏洞类型一并交代清楚。
+- 子智能体可以直接调用 \`code_audit_submit_finding\` 上报漏洞；也可以在完成后把结论回传给你，由你统一上报。任一方式都可以，不要重复上报同一条漏洞。
+- 全部审计完成后，由你（主会话）调用一次 \`code_audit_submit_summary\` 汇总。
 
 # 本次启用的漏洞审计提示词
 ${sections.join('\n\n')}
